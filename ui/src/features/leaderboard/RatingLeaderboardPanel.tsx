@@ -13,7 +13,7 @@ import { LeaderboardTable } from "./LeaderboardTable";
 import { PlayerDetailsPanel } from "./PlayerDetailsPanel";
 import { ipc } from "../../ipc/client";
 import type { LeaderboardEntry, RatingQuery } from "../../ipc/bindings";
-import type { MessageKey } from "../../i18n";
+import { formatNumber, type MessageKey } from "../../i18n";
 import { useAppStore } from "../../store/store";
 import { useTranslation } from "../../i18n/useTranslation";
 
@@ -172,7 +172,10 @@ export function RatingLeaderboardPanel() {
             <span className="leaderboard-result-count muted">
               {state.ratingPage.totalResults === null
                 ? `${state.ratingPage.entries.length} loaded`
-                : `${state.ratingPage.totalResults.toLocaleString("en-US")} players`}
+                : t("leaderboard.rating.playerCount", {
+                  count: state.ratingPage.totalResults,
+                  formatted: formatNumber(state.ratingPage.totalResults),
+                })}
             </span>
             <div className="leaderboard-columns" ref={columnsRef}>
               <Button

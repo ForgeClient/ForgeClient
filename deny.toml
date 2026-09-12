@@ -1,0 +1,67 @@
+# cargo-deny policy.
+#
+# The repository had none, which is not the same as having a permissive one:
+# `cargo deny check licenses` fails outright without a policy file, so the
+# check was simply never run and a dependency could arrive under any licence at
+# all without anybody hearing about it.
+#
+# The allowlist below is what the tree already resolves to. It is deliberately
+# an allowlist rather than a denylist: a new licence should stop a build and be
+# read by a person, not slip through because nobody thought to forbid it.
+
+[graph]
+all-features = false
+
+[licenses]
+# Everything the 578 crates in this tree actually use, and nothing else.
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "ISC",
+  # Five build-time crates reached through tauri-codegen: cssparser and its
+  # macros, selectors, dtoa-short, option-ext. Weak copyleft, file-scoped, and
+  # none of it is linked into the shipped binary.
+  "MPL-2.0",
+  "MIT",
+  "MIT-0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+# A crate offering several licences picks the first one here it matches.
+confidence-threshold = 0.9
+
+[[licenses.exceptions]]
+# `r-efi` is dual licensed MIT OR Apache-2.0 OR LGPL-2.1-or-later, and only
+# reachable on UEFI targets, which this client has none of. Named explicitly so
+# the LGPL half is a decision on the record rather than an accident of ordering.
+name = "r-efi"
+allow = ["MIT", "Apache-2.0"]
+
+[bans]
+# Duplicates are a fact of a Tauri dependency tree (three `winnow`s, two
+# `reqwest`s), and forcing them to one version is upstream's work, not a gate
+# this repository can pass today. Warn so the number is visible and does not
+# quietly grow.
+multiple-versions = "warn"
+# The workspace crates depend on each other by path, which resolves as a
+# wildcard version and is the normal shape for a workspace. `allow-wildcard-paths`
+# keeps the check meaningful for registry crates, where a wildcard really would
+# mean "any version of somebody else's code".
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[advisories]
+# `cargo audit` is the gate for these in CI; keeping the default here means
+# `cargo deny check` does not report them twice with different wording.
+yanked = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

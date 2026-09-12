@@ -5,6 +5,7 @@ import { ipc } from "../../ipc/client";
 import type { LeaderboardEntry } from "../../ipc/bindings";
 import { useAppStore } from "../../store/store";
 import { EMPTY_REPLAY_QUERY } from "../../shared/replayQuery";
+import { requestReplaySearch } from "../replays/replaySearchIntent";
 import { openPlayerCard } from "../player-card/playerCardActions";
 import { useTranslation } from "../../i18n/useTranslation";
 import { PlayerName } from "../../shared/nameColors";
@@ -44,14 +45,12 @@ export function PlayerDetailsPanel({ entry, heading }: PlayerDetailsPanelProps) 
     ipc.send({ kind: "Chat", command: { type: "selectChannel", payload: { channel: entry.playerName } } });
     ipc.send({ kind: "Nav", command: { type: "select", payload: { tab: "chat" } } });
   };
+  // Handed to the Replays tab rather than sent from here. Sending the search
+  // and the navigation as two messages raced: whichever landed first decided
+  // whose replays you got, and when the navigation won, the tab found a vault
+  // that had never been searched and ran its own default search over the top.
   const browseReplays = () => {
-    ipc.send({
-      kind: "Replays",
-      command: {
-        type: "searchVault",
-        payload: { query: { ...EMPTY_REPLAY_QUERY, player: entry.playerName, exactPlayer: true } },
-      },
-    });
+    requestReplaySearch({ ...EMPTY_REPLAY_QUERY, player: entry.playerName, exactPlayer: true });
     ipc.send({ kind: "Nav", command: { type: "select", payload: { tab: "replays" } } });
   };
   const copy = async () => {

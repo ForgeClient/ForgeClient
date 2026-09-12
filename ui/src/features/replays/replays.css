@@ -58,6 +58,22 @@
   overflow-x: auto;
 }
 
+/* The header's cells hold the drag handles, which are positioned against
+   them. */
+.replay-list-header > span {
+  position: relative;
+}
+
+/* Wider than it looks, and taller than the cell, so the grab area is findable
+   without a hairline target. The same shape the game browser's handle uses. */
+.replay-list-col-handle {
+  position: absolute;
+  top: -8px;
+  right: -10px;
+  bottom: -8px;
+  width: 11px;
+}
+
 .replay-list-header,
 .replay-list-row {
   display: grid;
@@ -141,6 +157,8 @@
    separator below. */
 .replay-list-row.watched {
   box-shadow: inset 0 0 0 1px var(--color-text);
+  /* The same subtle grey the watched card gets, for the same reason. */
+  background: color-mix(in srgb, var(--color-text) 5%, transparent);
 }
 
 .replay-list-row.watched.selected {

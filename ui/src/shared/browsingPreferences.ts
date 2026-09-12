@@ -27,6 +27,26 @@ const LEGACY_KEYS = [
 
 type LegacyStorage = Pick<Storage, "getItem" | "removeItem">;
 
+/**
+ * Column widths as a settings file may hold them. The twin of
+ * `normalize_column_widths` in faf-domain's settings slice.
+ *
+ * A zero stays a zero rather than being dropped: it is how one column says it
+ * keeps its designed width, and dropping it would shift every column after it
+ * onto the wrong width. Anything that is not a number at all becomes a zero
+ * for the same reason -- the position has to survive even when the value does
+ * not. `MAX_TABLE_COLUMNS` is the bound on the list itself.
+ */
+const MAX_TABLE_COLUMNS = 16;
+
+export function normalizeColumnWidths(widths: number[] | undefined): number[] {
+  return (widths ?? []).slice(0, MAX_TABLE_COLUMNS).map((width) =>
+    Number.isFinite(width) && width > 0
+      ? clampInteger(width, MIN_BROWSER_COLUMN_PX, MAX_BROWSER_COLUMN_PX, MIN_BROWSER_COLUMN_PX)
+      : 0,
+  );
+}
+
 export const DEFAULT_LIVE_REPLAY_FILTERS: LiveReplayFilters = {
   search: "",
   gameType: "",
@@ -91,6 +111,22 @@ export const VALID_MOD_VAULT_PRESETS = [
   "all",
 ] as const;
 
+/**
+ * Mirrors the consts of the same names in `faf_domain::state::settings`. The
+ * backend normalizes anything it is handed, so these exist so the UI never
+ * *offers* a value the backend would then quietly change underneath it.
+ */
+export const MAX_BROWSER_COLUMNS = 5;
+export const MIN_BROWSER_COLUMN_PX = 56;
+export const MAX_BROWSER_COLUMN_PX = 900;
+export const MIN_DETAIL_PX = 220;
+export const MAX_DETAIL_PX = 720;
+export const MIN_VAULT_PAGE_SIZE = 12;
+export const MAX_VAULT_PAGE_SIZE = 200;
+
+/** The page size a vault list uses when the setting is left at its default. */
+export const DEFAULT_VAULT_PAGE_SIZE = 36;
+
 export const DEFAULT_BROWSING_PREFERENCES: BrowsingPreferences = {
   customGamesView: "tiles",
   replaysView: "tiles",
@@ -101,6 +137,8 @@ export const DEFAULT_BROWSING_PREFERENCES: BrowsingPreferences = {
     hideUnranked: false,
     applyFilters: false,
     rules: [],
+    columnWidths: [],
+    detailWidth: 0,
   },
   matchmakerUnselectedQueues: [],
   matchmakerFactions: [...MATCHMAKER_FACTIONS],
@@ -111,6 +149,12 @@ export const DEFAULT_BROWSING_PREFERENCES: BrowsingPreferences = {
   favoriteMods: [],
   mapVaultPreset: "recommended",
   modVaultPreset: "recommended",
+  mapVaultSort: "",
+  modVaultSort: "",
+  vaultPageSize: 0,
+  replayListColumns: [],
+  liveReplayColumns: [],
+  coopBoardColumns: [],
   modPresets: [],
   leaderboardRatingColumns: [...DEFAULT_LEADERBOARD_RATING_COLUMNS],
   replayVaultPlayer: "",
@@ -155,6 +199,17 @@ export function normalizeBrowsingPreferences(
     favoriteMods: normalizeLabels(preferences.favoriteMods ?? [], 512, 256).map(asciiLower),
     mapVaultPreset: normalizeMapVaultPreset(preferences.mapVaultPreset),
     modVaultPreset: normalizeModVaultPreset(preferences.modVaultPreset),
+    mapVaultSort: truncateTrimmed(preferences.mapVaultSort ?? "", 32),
+    modVaultSort: truncateTrimmed(preferences.modVaultSort ?? "", 32),
+    // Zero means "the designed default", so it passes through untouched;
+    // anything else is bounded, matching `BrowsingPreferences::normalized`.
+    vaultPageSize:
+      preferences.vaultPageSize
+        ? clampInteger(preferences.vaultPageSize, MIN_VAULT_PAGE_SIZE, MAX_VAULT_PAGE_SIZE, 0)
+        : 0,
+    replayListColumns: normalizeColumnWidths(preferences.replayListColumns),
+    liveReplayColumns: normalizeColumnWidths(preferences.liveReplayColumns),
+    coopBoardColumns: normalizeColumnWidths(preferences.coopBoardColumns),
     modPresets: normalizeModPresets(preferences.modPresets ?? []),
     leaderboardRatingColumns:
       selectedColumns.length > 0 ? [...selectedColumns] : [...DEFAULT_LEADERBOARD_RATING_COLUMNS],
@@ -221,6 +276,14 @@ function normalizeCustomGamesBrowser(
     hideUnranked: Boolean(preferences.hideUnranked),
     applyFilters: Boolean(preferences.applyFilters),
     rules,
+    columnWidths: (preferences.columnWidths ?? [])
+      .slice(0, MAX_BROWSER_COLUMNS)
+      .map((width) =>
+        clampInteger(width, MIN_BROWSER_COLUMN_PX, MAX_BROWSER_COLUMN_PX, MIN_BROWSER_COLUMN_PX),
+      ),
+    detailWidth: preferences.detailWidth
+      ? clampInteger(preferences.detailWidth, MIN_DETAIL_PX, MAX_DETAIL_PX, 0)
+      : 0,
   };
 }
 

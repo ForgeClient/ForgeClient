@@ -81,9 +81,10 @@ pub use leaderboard::{
     RatingQuery, SeasonLeaderboard,
 };
 pub use lobby::{
-    AvailableAvatar, AvatarListStatus, Game, GameLaunch, HostGameConfig, JoinState, LobbyCommand,
-    LobbyEvent, LobbyState, LobbyStatus, MatchmakerQueue, MatchmakingState, PartyMember,
-    PartyState, PlayMode, PlayerVeto, PreparationPhase, RatingRange,
+    rating_for_game, rating_gate_blocks, AvailableAvatar, AvatarListStatus, Game, GameLaunch,
+    HostGameConfig, JoinState, LobbyCommand, LobbyEvent, LobbyState, LobbyStatus, MatchmakerQueue,
+    MatchmakingState, PartyMember, PartyState, PlayMode, PlayerVeto, PreparationPhase, RatingRange,
+    GLOBAL_LEADERBOARD,
 };
 pub use map_generator::{
     is_valid_preset_name, preset_file_name, DecodedMapName, DecodedStyle, GenerationType,

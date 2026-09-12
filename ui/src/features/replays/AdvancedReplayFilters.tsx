@@ -222,9 +222,9 @@ export function AdvancedReplayFilters({ form, set, setRange }: Props) {
           having the user wonder where their 2019 replays went. */}
       {!form.after && hasNarrowingFilter(form) && (
         <p className="muted vault-search-note">
-          Filtered searches without a start date only look back{" "}
-          {form.player ? "six months" : "three months"}; set “Played after” to search
-          further back.
+          {t(form.player
+            ? "replays.filters.dateFloorWithPlayer"
+            : "replays.filters.dateFloor")}
         </p>
       )}
     </div>

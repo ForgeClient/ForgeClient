@@ -4,6 +4,9 @@ description = "FAF client: Tauri shell. Thin: wires faf-app to Tauri commands/ev
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Never goes to crates.io: the workspace crates reach each other by path, and
+# cargo-deny only tolerates a path dependency in a crate that says so.
+publish = false
 
 [lib]
 name = "faforever_rust_client_lib"
@@ -18,6 +21,11 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
+# Refuses a second client and hands its arguments to the first. From
+# `tauri-apps/plugins-workspace`, the same organisation and repository as the
+# three plugins above; its eight dependencies were all already in the lockfile,
+# so it adds nothing transitively.
+tauri-plugin-single-instance = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

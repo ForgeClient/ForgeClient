@@ -139,6 +139,22 @@ export function baseMapName(mapName: string): string {
   return normalizeMapName(mapName).replace(/\.v\d+$/i, "");
 }
 
+/**
+ * The version number a vault map folder carries (`scmp_009.v0004` is 4), or
+ * `null` for a folder that states none.
+ *
+ * Leading zeroes go, because `v0004` is the filesystem's spelling of the
+ * number and `v4` is everyone else's. A base-game map, a generated one and a
+ * hand-made folder all answer `null`: they have no vault version, and a "v1"
+ * invented for them would be a claim nobody made.
+ */
+export function mapVersionOf(mapName: string): number | null {
+  const match = /\.v(\d+)$/i.exec(normalizeMapName(mapName));
+  if (!match) return null;
+  const version = Number.parseInt(match[1], 10);
+  return Number.isFinite(version) && version > 0 ? version : null;
+}
+
 function findCoopMission(mapName: string, missions?: CoopMission[]): CoopMission | undefined {
   const coopMissions = missions ?? (typeof window !== "undefined" ? useAppStore.getState?.()?.state?.coop?.missions : []);
   if (!coopMissions || coopMissions.length === 0) return undefined;

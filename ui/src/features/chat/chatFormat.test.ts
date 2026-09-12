@@ -61,6 +61,7 @@ describe("chat link rendering", () => {
       hostedAt: null,
       ratingMin: null,
       ratingMax: null,
+      enforceRatingRange: false,
       teams: {},
       simMods: {},
     };

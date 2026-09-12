@@ -3,6 +3,7 @@ import { Icon } from "../../design-system/Icon";
 import type { MatchmakerQueue, PlayerLeaguePlacement, PlayerRatingSummary } from "../../ipc/bindings";
 import { UNLISTED_DIVISION_IMAGE } from "./MatchmakerPlayerCard";
 import { formatClockDuration } from "../../shared/durations";
+import { queueRatingBuckets } from "./queueRatingRange";
 import { t } from "../../i18n";
 
 export type QueueDisplayState = "idle" | "searching" | "found" | "launching" | "cancelled";
@@ -51,6 +52,11 @@ export function MatchmakerQueueCard({
   onToggle,
   onOpenMapPool,
 }: Props) {
+  // Who is actually waiting, by rating. "10 queued" says nothing about whether
+  // any of them is near you, and "in range: 0" says only that none is: the
+  // question both leave open is whether the queue is empty around your rating
+  // or empty everywhere, which decides whether waiting is worth it.
+  const buckets = queueRatingBuckets(queue);
   return (
     <article className={`matchmaker-queue-card surface-panel${selected ? " is-selected" : ""}${disabled ? " incompatible" : ""}`} data-status={status}>
       {/* The whole card toggles, not a checkbox-sized strip at the top of it.
@@ -61,7 +67,9 @@ export function MatchmakerQueueCard({
         className="matchmaker-queue-select"
         aria-pressed={selected}
         disabled={disabled}
-        title={selected ? `${queueTitle(queue)} is in your search` : `Add ${queueTitle(queue)} to your search`}
+        title={t(selected ? "lobby.matchmaker.queueInSearch" : "lobby.matchmaker.queueAddToSearch", {
+          queue: queueTitle(queue),
+        })}
         onClick={onToggle}
       >
         <span className="matchmaker-queue-head">
@@ -98,7 +106,23 @@ export function MatchmakerQueueCard({
             would actually match you, was whichever fragment landed last. */}
         <span className="matchmaker-queue-facts">
           <span><Icon name="hourglass" size={14} /> {formatClockDuration(secondsUntilPop)}</span>
-          <span><Icon name="users" size={14} /> {queue.numPlayers} queued</span>
+          <span className="matchmaker-queue-queued">
+            <Icon name="users" size={14} /> {queue.numPlayers} queued
+            {buckets.length > 0 && (
+              // Hover-only and `pointer-events: none`, because this sits
+              // inside the card's own button and a focusable popover in there
+              // would be a control inside a control.
+              <span className="matchmaker-queue-breakdown" aria-hidden>
+                <b>{t("lobby.matchmaker.queueByRating")}</b>
+                {buckets.map((bucket) => (
+                  <span key={bucket.min}>
+                    <em>{bucket.min} – {bucket.max}</em>
+                    <i>{bucket.count}</i>
+                  </span>
+                ))}
+              </span>
+            )}
+          </span>
           <span><Icon name="play" size={14} /> {activeGames} active</span>
           {inRange !== null && (
             <span title={t("lobby.matchmaker.inRangeHint")}>

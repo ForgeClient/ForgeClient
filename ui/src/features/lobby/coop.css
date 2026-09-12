@@ -351,8 +351,25 @@
 
 .coop-board {
   width: 100%;
+  /* Fixed, so the colgroup's dragged widths are what the table uses rather
+     than a suggestion the widest row can overrule. */
+  table-layout: fixed;
+  min-width: 760px;
   border-collapse: collapse;
   font-size: 12px;
+}
+
+.coop-board th {
+  position: relative;
+}
+
+/* Same shape as every other column divider in the client. */
+.coop-board-col-handle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 11px;
 }
 
 .coop-board th,

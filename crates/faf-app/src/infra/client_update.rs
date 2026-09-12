@@ -64,6 +64,10 @@ pub const ASSET_SUFFIXES: [&str; 3] = [".AppImage", ".deb", ".rpm"];
 const DEFAULT_REPO: &str = "FAForeverRustClient/FAForeverRustClient";
 
 /// GitHub rejects unidentified API clients, so this is required, not polite.
+/// Thirty releases of GitHub JSON, with room to spare. The API's own page of
+/// thirty is well under a megabyte.
+const MAX_RELEASE_LIST_BYTES: u64 = 4 * 1024 * 1024;
+
 const USER_AGENT: &str = concat!("faforever-rust-client/", env!("CARGO_PKG_VERSION"));
 /// Hard disk/memory safety ceiling for a self-update asset. Current platform
 /// bundles are far smaller; a response beyond this is never a legitimate
@@ -85,7 +89,9 @@ pub struct ClientUpdateConfig {
 impl ClientUpdateConfig {
     pub fn faf() -> Self {
         let repo = env_or("FAF_CLIENT_UPDATE_REPO", DEFAULT_REPO);
-        let download_prefix = env_or(
+        // Where the client's own installer comes from is not an
+        // environment variable in a shipped build: see `dev_env_or`.
+        let download_prefix = crate::infra::dev_env_or(
             "FAF_CLIENT_UPDATE_DOWNLOAD_PREFIX",
             format!("https://github.com/{repo}/releases/download/"),
         );
@@ -106,7 +112,10 @@ impl GitHubUpdates {
     pub fn new(config: ClientUpdateConfig) -> Self {
         Self {
             config,
-            http: super::http::shared_http_client(),
+            // The installer is executed, so the transport refuses a redirect
+            // that leaves HTTPS. `is_trusted` pins the first URL to the
+            // release prefix; this is what stops a later hop undoing that.
+            http: super::http::https_only_download_client(),
         }
     }
 
@@ -161,10 +170,18 @@ impl GitHubUpdates {
             .map_err(|e| format!("could not reach the release list: {e}"))?;
 
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|e| format!("could not read the release list: {e}"))?;
+        // Bounded like every other body in the client. This was the one that
+        // was not, which is only a memory risk against a compromised GitHub
+        // API, but an exception with no reason behind it is the kind that
+        // gets copied.
+        let body = crate::infra::vault_install::bounded_body(
+            response,
+            "the release list",
+            MAX_RELEASE_LIST_BYTES,
+        )
+        .await
+        .map_err(|e| format!("could not read the release list: {e}"))?;
+        let body = String::from_utf8_lossy(&body).into_owned();
         if !status.is_success() {
             return Err(format!(
                 "the release list returned {status}: {}",

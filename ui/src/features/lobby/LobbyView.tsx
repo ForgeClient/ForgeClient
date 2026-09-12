@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../../design-system/Button";
 import { Icon } from "../../design-system/Icon";
 import { PlayerName } from "../../shared/nameColors";
@@ -12,6 +12,7 @@ import { MatchmakingPanel } from "./MatchmakingPanel";
 import { CoopPanel } from "./CoopPanel";
 import { GalacticWarPanel } from "./GalacticWarPanel";
 import { Modal } from "../../design-system/Modal";
+import { ResizeHandle } from "../../design-system/ResizeHandle";
 import {
   CustomGamesBrowser,
   GamePreviewDialog,
@@ -21,6 +22,7 @@ import {
   type GameViewMode,
 } from "./CustomGamesBrowser";
 import { CustomGamesToolbar, type SortMode } from "./CustomGamesToolbar";
+import { detailWidth, withDetailResized } from "./browserLayout";
 import { GameMapImage } from "./GameMapImage";
 import { requestModVaultFocus } from "../mods/modVaultFocus";
 import { PlayModeTabs } from "./PlayModeTabs";
@@ -43,6 +45,7 @@ import { findPlayer } from "../../store/reducer";
 import { assignedPlayerColor, includesName, nickKey } from "../../shared/nameColorsUtil";
 import { noteForPlayer } from "../../shared/playerNotes";
 import { EMPTY_REPLAY_QUERY } from "../../shared/replayQuery";
+import { requestReplaySearch } from "../replays/replaySearchIntent";
 import "./custom-games.css";
 import "./game-dialogs.css";
 import "./play.css";
@@ -273,7 +276,7 @@ function GameDetails({
               className="game-team-player"
               onClick={() => openPlayerCard(hostProfile?.id ?? null, game.host)}
               onContextMenu={(e) => onOpenUserMenu(game.host, e)}
-              title={`Open ${game.host}'s profile`}
+              title={t("lobby.browser.openProfile", { name: game.host })}
             >
               <PlayerName name={game.host} />
             </button>
@@ -382,7 +385,7 @@ function GameDetails({
                           className="game-team-player"
                           onClick={() => openPlayerCard(profile?.id ?? null, p)}
                           onContextMenu={(e) => onOpenUserMenu(p, e)}
-                          title={`Open ${p}'s profile`}
+                          title={t("lobby.browser.openProfile", { name: p })}
                         >
                           <PlayerName name={p} />
                         </button>
@@ -507,6 +510,14 @@ export function LobbyView() {
     if (useAppStore.getState().state.mods.vaultStatus.type === "idle") {
       ipc.send({ kind: "Mods", command: { type: "loadVault" } });
     }
+    // What is on disk, which until now only the Mods tab and the host dialog
+    // ever asked for. Joining is the other thing that needs the answer: a
+    // player who had not opened either since starting the client was told to
+    // download mods they had been playing with minutes earlier, because an
+    // empty list and an unread list look the same from here.
+    if (useAppStore.getState().state.mods.installedStatus.type === "idle") {
+      ipc.send({ kind: "Mods", command: { type: "loadInstalled" } });
+    }
   }, []);
 
   const isMatchmakerGame = (game: Game) =>
@@ -616,6 +627,34 @@ export function LobbyView() {
     });
   };
 
+  // Same shape as the list's column drag: the saved width seeds a local copy,
+  // the drag moves the copy, and letting go persists it. A settings write per
+  // pointer move would be a backend round trip per pixel.
+  const savedDetailWidth = useAppStore(
+    (state) => state.state.settings.browsing.customGamesBrowser.detailWidth,
+  );
+  const [draggedDetailWidth, setDraggedDetailWidth] = useState<number | null>(null);
+  const detailDragOrigin = useRef<number | null>(null);
+  const currentDetailWidth = draggedDetailWidth ?? detailWidth(savedDetailWidth);
+  const detailStyle = useMemo(
+    () => ({ gridTemplateColumns: `minmax(360px, 1fr) 5px ${currentDetailWidth}px` }),
+    [currentDetailWidth],
+  );
+  const onDetailDrag = (delta: number) => {
+    detailDragOrigin.current ??= currentDetailWidth;
+    setDraggedDetailWidth(withDetailResized(detailDragOrigin.current, delta));
+  };
+  const onDetailCommit = () => {
+    detailDragOrigin.current = null;
+    if (draggedDetailWidth !== null) updateGameBrowser({ detailWidth: draggedDetailWidth });
+    setDraggedDetailWidth(null);
+  };
+  const onDetailReset = () => {
+    detailDragOrigin.current = null;
+    setDraggedDetailWidth(null);
+    updateGameBrowser({ detailWidth: 0 });
+  };
+
   // Which mission the co-op dialog should open on. `undefined` means "whatever
   // the leaderboard is showing", which is the case when the toolbar button is
   // used rather than a specific mission.
@@ -702,7 +741,7 @@ export function LobbyView() {
       ) : inGalacticWar ? (
         <GalacticWarPanel />
       ) : (
-        <div className="custom-games-layout">
+        <div className="custom-games-layout" style={detailStyle}>
           <CustomGamesToolbar
             search={search}
             sort={sort}
@@ -736,6 +775,15 @@ export function LobbyView() {
             onSelect={setSelectedId}
             onJoin={requestJoin}
             onPreview={setPreviewGame}
+          />
+          {/* The divider sits between the list and the panel rather than on
+              either, so dragging it reads as moving the boundary. */}
+          <ResizeHandle
+            className="custom-games-divider"
+            label={t("lobby.browser.resizeDetails")}
+            onDrag={onDetailDrag}
+            onEnd={onDetailCommit}
+            onReset={onDetailReset}
           />
           {selected ? (
             <GameDetails
@@ -819,13 +867,7 @@ export function LobbyView() {
                 command: { type: "watchLive", payload: { uid: game.id, modName: game.modName, map: game.map } },
               }),
             viewReplays: (username) => {
-              ipc.send({
-                kind: "Replays",
-                command: {
-                  type: "searchVault",
-                  payload: { query: { ...EMPTY_REPLAY_QUERY, player: username, exactPlayer: true } },
-                },
-              });
+              requestReplaySearch({ ...EMPTY_REPLAY_QUERY, player: username, exactPlayer: true });
               ipc.send({ kind: "Nav", command: { type: "select", payload: { tab: "replays" } } });
             },
             inviteToParty: (id) =>

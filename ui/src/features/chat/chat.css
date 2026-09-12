@@ -464,6 +464,14 @@ html.is-resizing-chat-roster * {
   background: var(--color-surface-hover);
 }
 
+/* A line continuing the one above it sits tighter against it, so a run from
+   one person reads as one block. The name and avatar columns are still there,
+   empty, which is what keeps every body in the run on the same left edge. */
+.chat-message.is-continued {
+  padding-top: 0;
+  min-height: 0;
+}
+
 .chat-message.is-search-active {
   background: var(--color-accent-glow);
   box-shadow: inset 2px 0 var(--color-accent);

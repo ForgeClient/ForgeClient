@@ -66,3 +66,43 @@ export function prettyGameType(gameType: string): string {
   if (gameType.toLocaleLowerCase() === "coop") return t("replays.gameType.coop");
   return gameType.charAt(0).toLocaleUpperCase() + gameType.slice(1);
 }
+
+/**
+ * The featured mod the *game type* filter already stands for.
+ *
+ * Every co-op game carries the `coop` featured mod, so it reached both
+ * dropdowns, spelled "Co-op" in one and "coop" in the other. Two filters
+ * offering the same games under two spellings reads as two different things,
+ * and only one of them is where a player would look. Co-op keeps its entry
+ * under Game type, which is the honest place for it.
+ */
+const GAME_TYPE_FEATURED_MOD = "coop";
+
+/**
+ * The featured mods worth offering as a filter, in the order they are shown.
+ *
+ * Derived from the games actually on the list rather than from a fixed
+ * catalogue: the server invents featured mods faster than a client can list
+ * them, and a filter naming a mod nobody is playing filters to nothing.
+ */
+export function liveFeaturedModOptions(games: Game[]): string[] {
+  const names = games
+    .map((game) => game.modName)
+    .filter((name) => Boolean(name) && name.toLocaleLowerCase() !== GAME_TYPE_FEATURED_MOD);
+  return [...new Set(names)].sort();
+}
+
+/**
+ * A featured mod as a reader knows it. The four FAF ships have proper names;
+ * anything else is a technical name the server chose and is only capitalised,
+ * the same treatment [`prettyGameType`] gives an unknown type.
+ */
+export function prettyFeaturedMod(mod: string): string {
+  switch (mod.toLocaleLowerCase()) {
+    case "faf": return t("lobby.host.mod.faf");
+    case "fafbeta": return t("lobby.host.mod.fafbeta");
+    case "fafdevelop": return t("lobby.host.mod.fafdevelop");
+    case "nomads": return t("lobby.host.mod.nomads");
+    default: return mod.charAt(0).toLocaleUpperCase() + mod.slice(1);
+  }
+}

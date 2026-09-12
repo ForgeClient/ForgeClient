@@ -1545,7 +1545,15 @@ impl ReplayPort for ReplayClient {
         uid: i32,
         local_path: Option<PathBuf>,
     ) -> Result<ReplayDetails, String> {
-        let path = if let Some(path) = local_path.filter(|p| p.exists()) {
+        // The webview supplies this path, and it reached the parser unchecked:
+        // any readable file could be handed in and read as a replay. `OpenFile`
+        // is already narrowed by `prepare_scfareplay`, which refuses an
+        // unrecognised extension; this is the same gate for the other door.
+        //
+        // Extension rather than directory, because a replay opened from the
+        // file picker is legitimately outside the library, and the picking is
+        // the user's own authorisation.
+        let path = if let Some(path) = local_path.filter(|p| p.exists() && is_replay_file_name(p)) {
             path
         } else {
             let cached_scfa = cache_dir()?.join(format!("{uid}.scfareplay"));
@@ -3542,6 +3550,20 @@ struct ScfaReplay {
 
 /// Resolve a `.fafreplay`/`.scfareplay` source to a playable `.scfareplay`
 /// file plus its launch/update metadata.
+/// Whether a path names something this client will read as a replay.
+///
+/// The two extensions FA and FAF actually use, and the same pair
+/// `prepare_scfareplay` accepts. Nothing about the directory: a replay opened
+/// from the file picker is legitimately outside the library.
+fn is_replay_file_name(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("fafreplay")
+                || extension.eq_ignore_ascii_case("scfareplay")
+        })
+}
+
 async fn prepare_scfareplay(path: &std::path::Path) -> Result<ScfaReplay, String> {
     let ext = path
         .extension()

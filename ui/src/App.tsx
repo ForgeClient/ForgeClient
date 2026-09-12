@@ -7,6 +7,7 @@ import { ipc } from "./ipc/client";
 import { native } from "./ipc/native";
 import { RevisionedMirror } from "./ipc/revisionedMirror";
 import { useAppStore } from "./store/store";
+import { t } from "./i18n";
 import { LoginView } from "./features/auth/LoginView";
 import { AppShell } from "./features/shell/AppShell";
 import { CommandErrorBanner } from "./features/shell/CommandErrorBanner";
@@ -110,7 +111,11 @@ export function App() {
         (event) => useAppStore.getState().apply(event),
         () => ipc.snapshot(),
         (error) => {
-          if (active) setCommandError(`State synchronization failed: ${error instanceof Error ? error.message : String(error)}`);
+          if (active) {
+            setCommandError(t("app.stateSyncFailed", {
+              reason: error instanceof Error ? error.message : String(error),
+            }));
+          }
         },
       );
       // Register before requesting the snapshot. Deltas that race the IPC

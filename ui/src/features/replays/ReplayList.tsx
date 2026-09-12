@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon, type IconName } from "../../design-system/Icon";
 import {
   isGeneratedMap,
@@ -10,6 +10,8 @@ import { clientIntlTag } from "../../shared/dates";
 import { useAppStore } from "../../store/store";
 import { t, type MessageKey } from "../../i18n";
 import { useTranslation } from "../../i18n/useTranslation";
+import { ResizeHandle } from "../../design-system/ResizeHandle";
+import { useColumnWidths } from "../../shared/useColumnWidths";
 
 export type ReplayListCell = {
   primary: string;
@@ -224,6 +226,14 @@ function ReplayListRowView({ row }: { row: ReplayListRow }) {
   );
 }
 
+/**
+ * The designed widths, in the order the columns are drawn.
+ *
+ * The last column is not in here: it takes whatever is left, the way the game
+ * browser's does, so there is nothing to its right to give width to.
+ */
+const DEFAULT_COLUMN_PX = [56, 260, 140, 110, 70, 82, 126];
+
 export function ReplayList({
   groups,
   footer,
@@ -232,10 +242,32 @@ export function ReplayList({
   footer: ReactNode;
 }) {
   const { t } = useTranslation();
+  const columns = useColumnWidths("replayListColumns", DEFAULT_COLUMN_PX);
+  const template = `${columns.widths.map((width) => `${width}px`).join(" ")} minmax(120px, 1fr)`;
+
   return (
-    <section className="replay-list-wrap surface-panel" role="table" aria-label={t("replays.list.aria")}>
+    <section
+      className="replay-list-wrap surface-panel"
+      role="table"
+      aria-label={t("replays.list.aria")}
+      style={{ "--replay-list-columns": template } as CSSProperties}
+    >
       <div className="replay-list-header" role="row">
-        {COLUMNS.map((column) => <span className={column.className} key={column.label} role="columnheader">{t(column.label)}</span>)}
+        {COLUMNS.map((column, index) => (
+          <span className={column.className} key={column.label} role="columnheader">
+            {t(column.label)}
+            {/* The last column has nothing to its right to give width to. */}
+            {index < COLUMNS.length - 1 && (
+              <ResizeHandle
+                className="replay-list-col-handle"
+                label={t("lobby.browser.resizeColumn", { column: t(column.label) })}
+                onDrag={(delta) => columns.onDrag(index, delta)}
+                onEnd={columns.onCommit}
+                onReset={columns.onReset}
+              />
+            )}
+          </span>
+        ))}
       </div>
       <div className="replay-list-body" role="rowgroup">
         {groups.map((group) => (

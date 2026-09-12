@@ -6,7 +6,7 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import type { ChatPreferences, ChatUser, PlayerProfile, SocialState } from "../../ipc/bindings";
-import { openHttpsUrl, validateHttpsUrl } from "../../shared/externalLinks";
+import { openHttpsUrl, optionalHttpsUrl, validateHttpsUrl } from "../../shared/externalLinks";
 import { findPlayer, isModerator } from "../../store/reducer";
 import { t, type MessageKey } from "../../i18n";
 
@@ -406,14 +406,13 @@ export function renderFormattedText(text: string): ReactNode[] {
       parts.push(...renderBody(plainSegment, ""));
     }
 
-    let validHref = href;
-    try {
-      validHref = validateHttpsUrl(href);
-    } catch {
-      if (!/^https?:\/\//i.test(href)) {
-        validHref = "";
-      }
-    }
+    // One question, asked once. This used to validate, then keep the original
+    // `href` anyway for anything starting `http://` or `https://`, so a
+    // plaintext link and a `https://user:pw@host` one were rendered as links
+    // and then refused by `openHttpsUrl` on the click: a dead link with no
+    // feedback and an unhandled rejection in the console. If it is not a link
+    // this client will open, it is not drawn as one.
+    const validHref = optionalHttpsUrl(href) ?? "";
 
     const labelText = innerText.replace(/<[^>]+>/g, "").trim() || href;
 

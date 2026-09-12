@@ -22,6 +22,8 @@ import { formatShortDate } from "../../shared/dates";
 import { loadStatusNote } from "../../shared/loadStatusNote";
 import { GameBrowserRow, GameTile, type GameViewMode } from "./CustomGamesBrowser";
 import { coopFailureAction } from "./coopFailure";
+import { ResizeHandle } from "../../design-system/ResizeHandle";
+import { useColumnWidths } from "../../shared/useColumnWidths";
 import "./custom-games.css";
 import { useTranslation } from "../../i18n/useTranslation";
 import { scenarioBadge, sortCoopScenarios } from "./coopScenarios";
@@ -270,8 +272,25 @@ export function CoopPanel({ games, viewMode = "tiles", toolbar, onJoin, onHost }
  * there. What is left on this side is the leaderboard and the two selects that
  * choose whose leaderboard it is.
  */
+/**
+ * The designed widths of the record board, in the order the columns are drawn.
+ *
+ * The replay column is absent on purpose: it takes what is left, so there is
+ * nothing to its right for a handle to give width to.
+ */
+const BOARD_COLUMN_PX = [56, 96, 220, 130, 96, 110];
+
 function MissionDetail({ mission }: { mission: CoopMission }) {
   const { t } = useTranslation();
+  const columns = useColumnWidths("coopBoardColumns", BOARD_COLUMN_PX);
+  const boardLabels = [
+    "#",
+    t("lobby.coop.column.time"),
+    t("lobby.coop.column.players"),
+    t("lobby.coop.column.team"),
+    t("lobby.coop.column.secondary"),
+    t("lobby.coop.column.played"),
+  ];
   const coop = useAppStore((state) => state.state.coop);
   const note = loadStatusNote(
     coop.leaderboardStatus,
@@ -330,14 +349,29 @@ function MissionDetail({ mission }: { mission: CoopMission }) {
       {coop.leaderboard.length > 0 && (
         <div className="coop-board-scroll">
           <table className="coop-board">
+            {/* `table-layout: fixed` plus a colgroup is how a real table takes
+                dragged widths: putting them on the cells would let the widest
+                row win instead. */}
+            <colgroup>
+              {columns.widths.map((width, index) => (
+                <col key={boardLabels[index]} style={{ width: `${width}px` }} />
+              ))}
+              <col />
+            </colgroup>
             <thead>
               <tr>
-                <th scope="col">#</th>
-                <th scope="col">{t("lobby.coop.column.time")}</th>
-                <th scope="col">{t("lobby.coop.column.players")}</th>
-                <th scope="col">{t("lobby.coop.column.team")}</th>
-                <th scope="col">{t("lobby.coop.column.secondary")}</th>
-                <th scope="col">{t("lobby.coop.column.played")}</th>
+                {boardLabels.map((label, index) => (
+                  <th scope="col" key={label}>
+                    {label}
+                    <ResizeHandle
+                      className="coop-board-col-handle"
+                      label={t("lobby.browser.resizeColumn", { column: label })}
+                      onDrag={(delta) => columns.onDrag(index, delta)}
+                      onEnd={columns.onCommit}
+                      onReset={columns.onReset}
+                    />
+                  </th>
+                ))}
                 <th scope="col">{t("lobby.coop.column.replay")}</th>
               </tr>
             </thead>

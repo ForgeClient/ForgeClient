@@ -10,7 +10,9 @@
 use std::sync::Arc;
 
 use faf_app::{App, VersionedSnapshot};
-use faf_domain::state::{AuthCommand, LobbyCommand, SessionCommand, SettingsCommand};
+use faf_domain::state::{
+    AuthCommand, LobbyCommand, NavCommand, ReplayCommand, SessionCommand, SettingsCommand, Tab,
+};
 use faf_domain::{AppCommand, AppEvent, AppState};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -405,34 +407,86 @@ fn is_internal_navigation(url: &tauri::Url) -> bool {
         || url_str.starts_with("https://faforever.github.io/spooky-db")
 }
 
-/// News Hub video links arrive with the destination pasted onto the hub's own
-/// path. Unwrap those before handing the link to the browser.
-fn external_target(url: &tauri::Url) -> String {
+/// The link to hand the operating system, or `None` for one it must never see.
+///
+/// Two jobs, together because they are one decision. News Hub video links
+/// arrive with the destination pasted onto the hub's own path, so those are
+/// unwrapped; and the scheme is checked, because the opener starts whatever
+/// Windows has registered for it.
+///
+/// The scheme check used to exist only on `on_new_window`. `on_navigation`
+/// passed anything that was not an internal page straight through, so a
+/// top-level navigation out of an embedded page to `file:`, `ms-msdt:`,
+/// `search-ms:` or any other registered protocol would have been opened by the
+/// shell. The embeds run with `allow-top-navigation-by-user-activation`, so
+/// that navigation is reachable from a compromised newshub or spooky-db, and
+/// the `opener:allow-open-url` capability scope does not apply here: it gates
+/// the JavaScript command, not this Rust-side call.
+fn external_target(url: &tauri::Url) -> Option<String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        tracing::warn!(scheme = url.scheme(), "refusing to open a non-web link");
+        return None;
+    }
     let url_str = url.as_str();
-    if let Some(stripped) = url_str.strip_prefix("https://www.faforever.com/newshub/youtube.com/") {
-        format!("https://www.youtube.com/{stripped}")
-    } else if let Some(stripped) =
-        url_str.strip_prefix("https://www.faforever.com/newshub/youtu.be/")
-    {
-        format!("https://youtu.be/{stripped}")
-    } else {
-        url_str.to_string()
+    Some(
+        if let Some(stripped) =
+            url_str.strip_prefix("https://www.faforever.com/newshub/youtube.com/")
+        {
+            format!("https://www.youtube.com/{stripped}")
+        } else if let Some(stripped) =
+            url_str.strip_prefix("https://www.faforever.com/newshub/youtu.be/")
+        {
+            format!("https://youtu.be/{stripped}")
+        } else {
+            url_str.to_string()
+        },
+    )
+}
+
+/// Hand a link to the OS browser, if it is one the OS may be given.
+fn open_externally<R: tauri::Runtime>(handle: &tauri::AppHandle<R>, url: &tauri::Url) {
+    if let Some(target) = external_target(url) {
+        let _ = handle.opener().open_url(target, None::<&str>);
     }
 }
 
-fn external_link_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
-    tauri::plugin::Builder::<R>::new("external-link-handler")
-        .on_navigation(|webview, url| {
-            if is_internal_navigation(url) {
-                return true;
-            }
-            let _ = webview
-                .app_handle()
-                .opener()
-                .open_url(external_target(url), None::<&str>);
-            false
-        })
-        .build()
+/// The replay file this process was asked to open, if it was asked to open one.
+///
+/// A file association starts the client with the path as an argument, and
+/// nothing else this client is started with looks like one. The extension is
+/// checked rather than "the first argument that is not a flag", because the
+/// association is the only thing that should be able to make the client open a
+/// file, and `faf-client.exe --some-flag some/path` should not.
+///
+/// `argv[0]` is the executable and is skipped. The backend refuses a path whose
+/// extension it does not recognise anyway; this only decides whether to ask.
+fn replay_argument(argv: &[String]) -> Option<&str> {
+    argv.iter().skip(1).map(String::as_str).find(|argument| {
+        let lowered = argument.to_ascii_lowercase();
+        lowered.ends_with(".fafreplay") || lowered.ends_with(".scfareplay")
+    })
+}
+
+/// Hand a replay path to the running client and show it.
+///
+/// Deliberately `try_dispatch` and not a wait: this is called from the
+/// single-instance callback, which runs on Tauri's main thread, and from
+/// startup. Neither is a place to block on a replay that may take seconds to
+/// prepare.
+fn open_replay_from_argument(app: &tauri::AppHandle, path: &str) {
+    let Some(core) = app.try_state::<Core>() else {
+        tracing::warn!("asked to open a replay before the backend was ready");
+        return;
+    };
+    tracing::info!(%path, "opening a replay handed to the client as an argument");
+    let _ = core
+        .0
+        .try_dispatch(AppCommand::Nav(NavCommand::Select { tab: Tab::Replays }));
+    let _ = core
+        .0
+        .try_dispatch(AppCommand::Replays(ReplayCommand::OpenFile {
+            path: path.to_string(),
+        }));
 }
 
 pub fn run() {
@@ -445,6 +499,27 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        // First, and the order is not cosmetic: this is what decides whether
+        // this process is the client or a messenger for one that is already
+        // running, and everything below assumes it is the client.
+        //
+        // A second start is not an error to report. Double-clicking a
+        // `.fafreplay` is how most people will open one, and the shell starts
+        // a whole new process for it: the useful answer is to hand the path to
+        // the client that is already up, raise its window, and exit quietly.
+        // Anything else means two clients fighting over one lobby connection.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                // Unminimise first: `set_focus` on a minimised window raises
+                // nothing on Windows and the click appears to do nothing.
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            if let Some(path) = replay_argument(&argv) {
+                open_replay_from_argument(app, path);
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -472,7 +547,6 @@ pub fn run() {
                 )
                 .build(),
         )
-        .plugin(external_link_plugin())
         .on_window_event(|window, event| {
             #[cfg(windows)]
             if matches!(event, tauri::WindowEvent::Focused(false)) {
@@ -481,11 +555,10 @@ pub fn run() {
 
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if let Some(core) = window.try_state::<Core>() {
-                    let snapshot = core.0.versioned_snapshot();
-                    let is_in_game = matches!(
-                        snapshot.state.lobby.join,
-                        faf_domain::state::JoinState::InGame
-                    );
+                    // One field, not a clone of the whole state to read it.
+                    let is_in_game = core.0.with_state(|state| {
+                        matches!(state.lobby.join, faf_domain::state::JoinState::InGame)
+                    });
                     if is_in_game {
                         api.prevent_close();
                         let _ = window.emit("app://request-exit-confirm", ());
@@ -558,8 +631,9 @@ pub fn run() {
                 }
             }
 
-            // Real OAuth2 auth + (still-faked) lobby. Set FAF_FAKE_AUTH=1 to run
-            // fully offline without a browser login during local dev.
+            // Real OAuth2 auth and the real lobby WebSocket
+            // (`infra::LobbyClient`). Set FAF_FAKE_AUTH=1 to run fully offline
+            // without a browser login during local dev.
             let ports = faf_app::infra::ports_from_env();
             let (core, app_loop) = App::new(backend_version, ports);
             let core = Arc::new(core);
@@ -621,7 +695,18 @@ pub fn run() {
                 let _ = startup_core.try_dispatch(AppCommand::Session(SessionCommand::Hello));
             });
 
+
             app.manage(Core(core));
+
+            // The other half of the file association: this is the client being
+            // started *by* a double-click rather than being told about one by
+            // a second process. After `app.manage`, because the dispatch looks
+            // the `Core` up out of Tauri's state and would otherwise find
+            // nothing and log a warning about its own startup.
+            let arguments: Vec<String> = std::env::args().collect();
+            if let Some(path) = replay_argument(&arguments) {
+                open_replay_from_argument(app.handle(), path);
+            }
 
             // Create the main window programmatically so we can attach
             // on_navigation and on_new_window hooks. These intercept external
@@ -647,24 +732,24 @@ pub fn run() {
             .min_inner_size(560.0, 480.0)
             .resizable(true)
             .initialization_script_for_all_frames(NEWS_EXTERNAL_LINK_SCRIPT)
+            // The only navigation hook. A plugin carrying a second copy of
+            // this used to be registered as well, and never ran: Tauri asks
+            // the builder closure first (`manager::webview::prepare_pending_webview`)
+            // and skips the plugin store when it answers `false`, which this
+            // does for every external URL. Two copies of a security decision
+            // where one is unreachable is how the reachable one drifts.
             .on_navigation(move |url| {
                 // Allow the Tauri app origin and the two embedded site roots.
                 if is_internal_navigation(url) {
                     return true;
                 }
-                let _ = nav_handle
-                    .opener()
-                    .open_url(external_target(url), None::<&str>);
+                open_externally(&nav_handle, url);
                 false
             })
             .on_new_window(move |url, _features| {
                 // Any new-window request (target="_blank", window.open, popup)
                 // that escapes the iframe sandbox is routed to the OS browser.
-                if matches!(url.scheme(), "http" | "https") {
-                    let _ = new_win_handle
-                        .opener()
-                        .open_url(external_target(&url), None::<&str>);
-                }
+                open_externally(&new_win_handle, &url);
                 tauri::webview::NewWindowResponse::Deny
             })
             .build()?;
@@ -933,17 +1018,40 @@ mod tests {
         assert_eq!(
             super::external_target(&url(
                 "https://www.faforever.com/newshub/youtube.com/watch?v=abc"
-            )),
-            "https://www.youtube.com/watch?v=abc"
+            ))
+            .as_deref(),
+            Some("https://www.youtube.com/watch?v=abc")
         );
         assert_eq!(
-            super::external_target(&url("https://www.faforever.com/newshub/youtu.be/abc")),
-            "https://youtu.be/abc"
+            super::external_target(&url("https://www.faforever.com/newshub/youtu.be/abc"))
+                .as_deref(),
+            Some("https://youtu.be/abc")
         );
         assert_eq!(
-            super::external_target(&url("https://forum.faforever.com/topic/1")),
-            "https://forum.faforever.com/topic/1"
+            super::external_target(&url("https://forum.faforever.com/topic/1")).as_deref(),
+            Some("https://forum.faforever.com/topic/1")
         );
+    }
+
+    #[test]
+    fn only_web_links_are_ever_handed_to_the_operating_system() {
+        // The opener starts whatever Windows has registered for a scheme, and
+        // the embeds can drive a top-level navigation. A compromised newshub
+        // must not be able to reach a protocol handler through this.
+        for hostile in [
+            "file:///C:/Windows/System32/calc.exe",
+            "ms-msdt:/id%20PCWDiagnostic",
+            "search-ms:query=passwords",
+            "steam://run/9420",
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+        ] {
+            assert_eq!(
+                super::external_target(&url(hostile)),
+                None,
+                "{hostile} must never reach the OS opener"
+            );
+        }
     }
 
     #[test]

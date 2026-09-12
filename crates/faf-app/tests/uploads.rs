@@ -23,13 +23,24 @@ struct StubUploads {
 
 #[async_trait]
 impl UploadsPort for StubUploads {
+    // No picture in these tests: they are about what gets published, and a
+    // preview is only what the dialog draws while deciding.
+    async fn map_preview(&self, _request: UploadRequest) -> String {
+        String::new()
+    }
+
     async fn publish(&self, request: UploadRequest) -> mpsc::Receiver<UploadStatus> {
         self.seen.lock().unwrap().push(request);
         let (tx, rx) = mpsc::channel(8);
         let outcome = self.outcome.clone();
         let hold = self.hold;
         tokio::spawn(async move {
-            let _ = tx.send(UploadStatus::Compressing).await;
+            let _ = tx
+                .send(UploadStatus::Compressing {
+                    done_bytes: 0,
+                    total_bytes: 1024,
+                })
+                .await;
             if !hold.is_zero() {
                 tokio::time::sleep(hold).await;
             }
@@ -44,6 +55,12 @@ struct ForbiddenUploads;
 
 #[async_trait]
 impl UploadsPort for ForbiddenUploads {
+    // No picture in these tests: they are about what gets published, and a
+    // preview is only what the dialog draws while deciding.
+    async fn map_preview(&self, _request: UploadRequest) -> String {
+        String::new()
+    }
+
     async fn publish(&self, request: UploadRequest) -> mpsc::Receiver<UploadStatus> {
         panic!("the port must not be reached for {request:?}");
     }

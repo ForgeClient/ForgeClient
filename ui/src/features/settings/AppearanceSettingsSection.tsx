@@ -4,6 +4,7 @@ import { useAppStore } from "../../store/store";
 import { SettingRow, SettingsSwitch } from "./SettingControls";
 import { ThemePicker } from "./ThemePicker";
 import { useTranslation } from "../../i18n/useTranslation";
+import { DEFAULT_VAULT_PAGE_SIZE } from "../../shared/browsingPreferences";
 
 const save = (preferences: AppearancePreferences) =>
   ipc.send({ kind: "Settings", command: { type: "setAppearance", payload: { preferences } } });
@@ -39,9 +40,35 @@ const TILE_COLUMN_OPTIONS = [
   { value: 6, label: "6" },
 ] as const;
 
+/**
+ * Entries per page in the four vault lists.
+ *
+ * One setting rather than four, because the question is how much of the screen
+ * a reader wants filled, and answering it separately for maps and mods and for
+ * installed and vault would be four controls saying the same thing. 36 is what
+ * the lists have always opened at and stays the default.
+ */
+const VAULT_PAGE_SIZE_OPTIONS = [24, 36, 60, 96, 150] as const;
+
 export function AppearanceSettingsSection() {
   const { t } = useTranslation();
   const preferences = useAppStore((state) => state.state.settings.appearance);
+  const browsing = useAppStore((state) => state.state.settings.browsing);
+
+  const saveVaultPageSize = (size: number) =>
+    ipc.send({
+      kind: "Settings",
+      command: {
+        type: "setBrowsing",
+        payload: {
+          preferences: {
+            ...browsing,
+            vaultPageSize: size === DEFAULT_VAULT_PAGE_SIZE ? 0 : size,
+          },
+        },
+      },
+    });
+  const activePageSize = browsing.vaultPageSize || DEFAULT_VAULT_PAGE_SIZE;
 
   return (
     <>
@@ -102,6 +129,28 @@ export function AppearanceSettingsSection() {
               </button>
             );
           })}
+        </div>
+      </SettingRow>
+      <SettingRow
+        label={t("settings.appearance.vaultPageSize")}
+        hint={t("settings.appearance.vaultPageSizeHint")}
+      >
+        <div
+          className="settings-segmented surface"
+          role="group"
+          aria-label={t("settings.appearance.vaultPageSize")}
+        >
+          {VAULT_PAGE_SIZE_OPTIONS.map((size) => (
+            <button
+              type="button"
+              key={size}
+              className={activePageSize === size ? "is-active" : ""}
+              aria-pressed={activePageSize === size}
+              onClick={() => void saveVaultPageSize(size)}
+            >
+              {size}
+            </button>
+          ))}
         </div>
       </SettingRow>
       <SettingRow

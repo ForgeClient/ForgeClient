@@ -67,7 +67,7 @@ export function ReportPlayerModal() {
       <form onSubmit={(event) => { event.preventDefault(); submit(); }}>
         <header className="report-player-head">
           <span className="report-player-eyebrow">{t("reporting.title")}</span>
-          <h2>Report {report.login}</h2>
+          <h2>{t("reporting.reportPlayer", { name: report.login })}</h2>
           <p className="muted">
             {t("reporting.intro")}
           </p>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MatchmakerQueue, PlayerRatingSummary } from "../../ipc/bindings";
-import { playersInRatingRange } from "./queueRatingRange";
+import { playersInRatingRange, queueRatingBuckets } from "./queueRatingRange";
 
 function queue(overrides: Partial<MatchmakerQueue> = {}): MatchmakerQueue {
   return {
@@ -73,5 +73,41 @@ describe("players in your rating range", () => {
 
   it("is a real zero when everybody waiting is out of reach", () => {
     expect(playersInRatingRange(queue(), rating(2500, 60), 0)).toBe(0);
+  });
+});
+
+describe("the queue breakdown by rating", () => {
+  it("groups searches by the middle of their window", () => {
+    // Middles of 1000, 1300 and 1800: the 800 band, the 1200 band, the 1600.
+    expect(queueRatingBuckets(queue())).toEqual([
+      { min: 800, max: 1200, count: 1 },
+      { min: 1200, max: 1600, count: 1 },
+      { min: 1600, max: 2000, count: 1 },
+    ]);
+  });
+
+  it("counts several searches into the same band", () => {
+    const crowded = queue({
+      boundary80s: [
+        { min: 900, max: 1100 },
+        { min: 800, max: 1200 },
+        { min: 950, max: 1050 },
+      ],
+    });
+    expect(queueRatingBuckets(crowded)).toEqual([{ min: 800, max: 1200, count: 3 }]);
+  });
+
+  it("leaves out the bands nobody is waiting in", () => {
+    const sparse = queue({ boundary80s: [{ min: 1900, max: 2100 }] });
+    expect(queueRatingBuckets(sparse)).toEqual([{ min: 2000, max: 2400, count: 1 }]);
+  });
+
+  it("falls back to the wider windows when the narrow ones are absent", () => {
+    const wide = queue({ boundary80s: [] });
+    expect(queueRatingBuckets(wide).map((bucket) => bucket.min)).toEqual([800, 1200, 1600]);
+  });
+
+  it("says nothing about an empty queue", () => {
+    expect(queueRatingBuckets(queue({ boundary80s: [], boundary75s: [] }))).toEqual([]);
   });
 });

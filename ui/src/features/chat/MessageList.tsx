@@ -18,6 +18,7 @@ import { formatTime, renderBody, resolvedNickStyle, showsTime } from "./chatForm
 import type { ChatGameLink, PingIndex } from "./chatFormat";
 import { useTranslation } from "../../i18n/useTranslation";
 import { playersByNickname } from "../../store/reducer";
+import { continuesPrevious } from "./messageFilters";
 
 /** Distance from the bottom, in px, still counted as "at the bottom". */
 const STICK_THRESHOLD = 48;
@@ -290,6 +291,7 @@ export const MessageList = memo(function MessageList({
                 && showsTime(message.timestamp, displayedMessages[i - 1]?.timestamp, use24HourTime)
               }
               use24HourTime={use24HourTime}
+              continued={continuesPrevious(message, displayedMessages[i - 1])}
               user={usersByName.get(message.sender.toLowerCase())}
               profile={profilesByName.get(message.sender.toLowerCase())}
               social={social}
@@ -329,6 +331,7 @@ const Line = memo(function Line({
   onNickContextMenu,
   menuOpen,
   use24HourTime,
+  continued,
   user,
   profile,
   social,
@@ -357,6 +360,8 @@ const Line = memo(function Line({
   onNickContextMenu: (nick: string, event: React.MouseEvent) => void;
   menuOpen: boolean;
   use24HourTime: boolean;
+  /** This line continues the one above it, so it carries no name of its own. */
+  continued: boolean;
   user: ChatUser | undefined;
   profile: PlayerProfile | undefined;
   social: SocialState;
@@ -400,7 +405,7 @@ const Line = memo(function Line({
       type="button"
       className={`${nameStyle ? "chat-nick" : "chat-nick is-monochrome"}${menuOpen ? " is-menu-open" : ""}`}
       style={nameStyle}
-      title={`Message ${message.sender}`}
+      title={t("chat.message.openConversation", { name: message.sender })}
       onClick={() => onNickClick(message.sender)}
       onContextMenu={(e) => {
         // The player menu wins over the row's reply gesture: this is the one
@@ -416,7 +421,10 @@ const Line = memo(function Line({
   return (
     <div
       ref={rowRef}
-      className={`chat-message is-${message.kind}${fromSelf ? " is-self" : ""}${activeSearchMatch ? " is-search-active" : ""}`}
+      className={
+        `chat-message is-${message.kind}${fromSelf ? " is-self" : ""}`
+        + `${activeSearchMatch ? " is-search-active" : ""}${continued ? " is-continued" : ""}`
+      }
       onContextMenu={replyOnRightClick}
     >
       {/* The answered line, quoted from the scrollback rather than copied into
@@ -464,8 +472,12 @@ const Line = memo(function Line({
         </>
       ) : (
         <>
+          {/* A run of lines from one person keeps the avatar and the name on
+              its first line only. Both columns stay, empty, so every body in
+              the run still starts at the same place: the alignment is what
+              makes the run read as one block rather than as ragged text. */}
           <span className="chat-message-avatar">
-            {profile?.avatarUrl && (
+            {!continued && profile?.avatarUrl && (
               <img
                 src={profile.avatarUrl}
                 alt=""
@@ -478,7 +490,7 @@ const Line = memo(function Line({
               />
             )}
           </span>
-          {nick}
+          {continued ? <span className="chat-message-nick is-continued" aria-hidden="true" /> : nick}
           <span className="chat-message-body" style={nameStyle}>{body}</span>
         </>
       )}

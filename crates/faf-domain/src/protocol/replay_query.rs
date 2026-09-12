@@ -433,10 +433,7 @@ fn common_clauses(query: &ReplayQuery, fallback_after: Option<&str>) -> Vec<Stri
         clauses.push(r#"validity=="VALID""#.to_string());
     }
     if !query.map.is_empty() {
-        clauses.push(format!(
-            r#"mapVersion.map.displayName=="{}""#,
-            glob(&query.map)
-        ));
+        clauses.push(map_clause(&query.map));
     }
     if !query.map_author.is_empty() {
         clauses.push(format!(
@@ -644,25 +641,102 @@ fn km_to_pixels(km: i32) -> i32 {
     (km as f32 * MAP_PIXELS_PER_KM).round() as i32
 }
 
-/// A substring match. RSQL uses `*` as its wildcard, so a literal `*` the user
-/// typed has to go: otherwise `a*b` silently becomes a two-part wildcard.
+/// The API's wildcard, around the longest part of the value it can actually
+/// search for.
+///
+/// Elide, which is what the FAF API is built on, does not take a wildcard in
+/// the middle of a value. A `*` at the start or the end selects a prefix,
+/// suffix or infix match and is then stripped; anything between is matched
+/// literally. So `*Seton*s*` asks for names containing the characters
+/// `Seton*s`, and nothing is called that.
+///
+/// That matters because of the apostrophe. The base game's map is `Seton's
+/// Clutch` and the FAF re-upload is `Setons Clutch`, the character cannot be
+/// put inside a quoted RSQL argument, and the API offers no way to escape it.
+/// Dropping it searched for `*Setons Clutch*`, which finds the re-upload and
+/// misses the original. Turning it into a wildcard searched for a literal star
+/// and found neither, which is what this replaces.
+///
+/// What is left is to search for the longest stretch the API can take: for
+/// `Seton's` that is `*Seton*`, which finds both spellings. A wider search
+/// than was asked for, and the alternative is no results at all.
 fn glob(value: &str) -> String {
-    format!("*{}*", escape(value))
+    let longest = value
+        .split(is_reserved)
+        .max_by_key(|part| part.chars().count())
+        .unwrap_or_default();
+    if longest.is_empty() {
+        // Nothing searchable was typed. Match everything rather than build a
+        // filter on a bare wildcard pair that means the same thing.
+        return "*".to_string();
+    }
+    format!("*{longest}*")
 }
 
-/// Strip the characters that would break out of a quoted RSQL argument.
-/// The API offers no escape syntax, so removal is the only safe option: and
-/// none of them are meaningful in a login, map name or title.
+/// The map clause, matching the display name *or* the folder name.
+///
+/// A player reading a replay's details sees `Seton's Clutch`, but the name the
+/// game and the vault use is `scmp_009`, and both get typed into the search
+/// box. Only the display name was matched, so the folder name found nothing.
+fn map_clause(value: &str) -> String {
+    let pattern = glob(value);
+    format!(r#"(mapVersion.map.displayName=="{pattern}",mapVersion.folderName=="{pattern}")"#)
+}
+
+/// The characters that would break out of a quoted RSQL argument, or mean
+/// something to the grammar around it. The API offers no escape syntax, so
+/// removal is the only safe option: and none of them are meaningful in a
+/// login, map name or title.
+fn is_reserved(c: char) -> bool {
+    matches!(c, '"' | '\\' | '*' | ';' | '(' | ')' | ',' | '\'')
+}
+
+/// Strip the reserved characters outright. An exact match has no wildcard to
+/// put in their place, which is why [`glob`] cannot share this.
 fn escape(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| !matches!(c, '"' | '\\' | '*' | ';' | '(' | ')' | ',' | '\''))
-        .collect()
+    value.chars().filter(|c| !is_reserved(*c)).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bug this file has now been through twice.
+    ///
+    /// Elide takes a wildcard only at the ends of a value, so the fix cannot be
+    /// "put a wildcard where the apostrophe was": that asks for a literal star.
+    #[test]
+    fn an_apostrophe_widens_the_search_instead_of_breaking_it() {
+        // Finds `Seton's Clutch` and `Setons Clutch` alike, which is the point.
+        assert_eq!(glob("Seton's"), "*Seton*");
+        // The longest stretch the API can take, which here is everything after
+        // the apostrophe. Both spellings contain it.
+        assert_eq!(glob("Seton's Clutch"), "*s Clutch*");
+        // No reserved character: unchanged from what it always did.
+        assert_eq!(glob("Setons"), "*Setons*");
+        assert_eq!(glob("scmp_009"), "*scmp_009*");
+    }
+
+    #[test]
+    fn a_value_with_nothing_searchable_in_it_matches_everything() {
+        assert_eq!(glob("'"), "*");
+        assert_eq!(glob("\"\"\""), "*");
+        assert_eq!(glob(""), "*");
+    }
+
+    /// Never an internal wildcard, whatever is typed: that is the shape the API
+    /// cannot read.
+    #[test]
+    fn the_pattern_never_has_a_wildcard_in_the_middle() {
+        for typed in ["a'b", "a*b*c", "x;y;z", "(a),(b)", "Seton's Clutch"] {
+            let pattern = glob(typed);
+            let inner = &pattern[1..pattern.len() - 1];
+            assert!(
+                !inner.contains('*'),
+                "{typed} produced {pattern}, which asks for a literal star"
+            );
+        }
+    }
 
     fn query() -> ReplayQuery {
         ReplayQuery::default()
@@ -713,11 +787,11 @@ mod tests {
         assert_eq!(q.player_names(), vec!["Stormlord", "Foley"]);
         assert_eq!(
             build_filter(&q, None, Some("Stormlord")).unwrap(),
-            r#"(playerStats.player.login=="Stormlord";mapVersion.map.displayName=="*Setons*")"#
+            r#"(playerStats.player.login=="Stormlord";(mapVersion.map.displayName=="*Setons*",mapVersion.folderName=="*Setons*"))"#
         );
         assert_eq!(
             build_filter(&q, None, Some("Foley")).unwrap(),
-            r#"(playerStats.player.login=="Foley";mapVersion.map.displayName=="*Setons*")"#
+            r#"(playerStats.player.login=="Foley";(mapVersion.map.displayName=="*Setons*",mapVersion.folderName=="*Setons*"))"#
         );
 
         let q_wide = ReplayQuery {
@@ -726,7 +800,7 @@ mod tests {
         };
         assert_eq!(
             build_filter(&q_wide, None, Some("Foley")).unwrap(),
-            r#"(playerStats.player.login=="*Foley*";mapVersion.map.displayName=="*Setons*")"#
+            r#"(playerStats.player.login=="*Foley*";(mapVersion.map.displayName=="*Setons*",mapVersion.folderName=="*Setons*"))"#
         );
     }
 
@@ -755,9 +829,9 @@ mod tests {
             map: "Setons".into(),
             ..q
         };
-        assert!(build_scan_filter(&mapped, &[42], None)
-            .unwrap()
-            .contains(r#"mapVersion.map.displayName=="*Setons*""#));
+        assert!(build_scan_filter(&mapped, &[42], None).unwrap().contains(
+            r#"(mapVersion.map.displayName=="*Setons*",mapVersion.folderName=="*Setons*")"#
+        ));
         assert_eq!(
             build_scan_filter(&mapped, &[], None),
             None,
@@ -876,7 +950,7 @@ mod tests {
         };
         assert_eq!(
             build_filter(&q, None, None).unwrap(),
-            r#"(validity=="VALID";mapVersion.map.displayName=="*Setons*")"#
+            r#"(validity=="VALID";(mapVersion.map.displayName=="*Setons*",mapVersion.folderName=="*Setons*"))"#
         );
     }
 
@@ -965,7 +1039,7 @@ mod tests {
         };
         let filter = build_filter(&q, None, None).unwrap();
         for expected in [
-            r#"mapVersion.map.displayName=="*Setons*""#,
+            r#"(mapVersion.map.displayName=="*Setons*",mapVersion.folderName=="*Setons*")"#,
             r#"mapVersion.map.author.login=="*Ozonex*""#,
             r#"name=="*all welcome*""#,
             r#"id=="22841190""#,
@@ -1211,5 +1285,56 @@ mod tests {
             ..query()
         };
         assert_eq!(q.fallback_months(), Some(3));
+    }
+
+    #[test]
+    fn a_map_name_matches_the_folder_name_too() {
+        // `scmp_009` is what the vault and the game call Seton's Clutch, and it
+        // is what a player copying a name out of a replay folder types.
+        let q = ReplayQuery {
+            map: "scmp_009".into(),
+            ..query()
+        };
+        assert_eq!(
+            build_filter(&q, None, None).unwrap(),
+            r#"((mapVersion.map.displayName=="*scmp_009*",mapVersion.folderName=="*scmp_009*"))"#
+        );
+    }
+
+    /// The bug this file has been through three times.
+    ///
+    /// The base map is `Seton's Clutch` and the FAF re-upload is `Setons
+    /// Clutch`. Dropping the apostrophe searched for `*Setons Clutch*`, which
+    /// found the re-upload and missed the original; putting a wildcard where
+    /// it had been searched for a literal star, because Elide reads a wildcard
+    /// only at the ends of a value, and found neither. What is searched now is
+    /// the longest stretch either spelling shares.
+    #[test]
+    fn a_reserved_character_narrows_the_value_rather_than_breaking_it() {
+        let q = ReplayQuery {
+            map: "Seton's Clutch".into(),
+            ..query()
+        };
+        let filter = build_filter(&q, None, None).unwrap();
+        assert!(
+            filter.contains(r#"mapVersion.map.displayName=="*s Clutch*""#),
+            "{filter}"
+        );
+        assert!(
+            !filter.contains("*Seton*s"),
+            "an internal wildcard is the shape the API cannot read: {filter}"
+        );
+
+        // Reserved characters never pile up into a run of wildcards, and a
+        // value made of nothing else does not become a filter on `*` alone.
+        let q = ReplayQuery {
+            map: "**".into(),
+            ..query()
+        };
+        let filter = build_filter(&q, None, None).unwrap();
+        assert!(
+            filter.contains(r#"mapVersion.map.displayName=="*""#),
+            "{filter}"
+        );
     }
 }

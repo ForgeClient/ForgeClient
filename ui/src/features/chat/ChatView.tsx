@@ -51,9 +51,21 @@ const STATUS_LABEL = {
  * also reports: a duplicate is better than a blank row, and IRC channels
  * without a topic are the minority.
  */
+/**
+ * Whether a channel's topic is just the channel's own name.
+ *
+ * `#aeolus` arrives with exactly that as its topic, so the row under the tab
+ * strip printed the name the tab above it had already printed, in smaller and
+ * greyer type. A topic that says nothing is the same as no topic.
+ */
+function topicRepeatsTheName(name: string, topic: string): boolean {
+  const bare = (value: string) => value.trim().replace(/^#+/, "").toLocaleLowerCase();
+  return bare(topic) === bare(name);
+}
+
 function channelContext(channel: ChatChannel | undefined, status: ChatStatus): string {
   if (!channel) return t(STATUS_LABEL[status]);
-  if (channel.topic) return channel.topic;
+  if (channel.topic && !topicRepeatsTheName(channel.name, channel.topic)) return channel.topic;
   if (isPrivateChannel(channel.name)) return t("chat.header.privateWith", { name: channel.name });
   const count = channel.users.length;
   return t("chat.header.online", { count });
@@ -273,7 +285,7 @@ export function ChatView() {
                 },
               })}
             />
-            Joins &amp; parts
+            {t("chat.joinsAndParts")}
           </label>
         </header>
 

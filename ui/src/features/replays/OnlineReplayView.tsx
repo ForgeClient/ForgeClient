@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pagination } from "../../design-system/Pagination";
 import type { ReplayQuery } from "../../ipc/bindings";
 import { ipc } from "../../ipc/client";
@@ -9,6 +9,7 @@ import { isoDaysAgo, personalReplayQuery } from "../../shared/replayQuery";
 import { loadStoredSet, saveStoredSet } from "../../shared/storage";
 import { OnlineReplayList, ReplayCard, ReplayDetailPanel } from "./OnlineReplayPresentation";
 import { ReplayViewSwitch, type ReplayViewMode } from "./ReplayViewSwitch";
+import { subscribeReplaySearch, takeReplaySearch } from "./replaySearchIntent";
 import { VaultSearch } from "./VaultSearch";
 import "./online-replays.css";
 import { useTranslation } from "../../i18n/useTranslation";
@@ -64,17 +65,35 @@ export function OnlineReplayView({ busy }: { busy: boolean }) {
 
   const initialPlayer = browsing.replayVaultPlayer || self;
 
+  // Somebody else's search wins over the default one, and having run it, the
+  // default must not fire behind it: the store has not caught up yet, so
+  // `vaultStatus` still reads `idle` for a beat. The ref is that beat.
+  const handedOver = useRef(false);
+
+  const runRequestedSearch = useCallback(() => {
+    const requested = takeReplaySearch();
+    if (!requested) return false;
+    handedOver.current = true;
+    searchVault(requested);
+    return true;
+  }, []);
+
   useEffect(() => {
     const state = useAppStore.getState().state;
     const playerToSearch = state.settings.browsing.replayVaultPlayer || self;
-    if (state.replays.vaultStatus.type === "idle" && playerToSearch) {
-      searchVault(personalReplayQuery(playerToSearch, isoDaysAgo(365)));
+    if (!runRequestedSearch() && !handedOver.current) {
+      if (state.replays.vaultStatus.type === "idle" && playerToSearch) {
+        searchVault(personalReplayQuery(playerToSearch, isoDaysAgo(365)));
+      }
     }
     // The two dropdowns' contents. Both are cheap and cached in state, so
     // this is a no-op on every visit after the first.
     if (state.replays.featuredMods.length === 0) loadFeaturedMods();
     if (state.leaderboard.catalogStatus.type === "idle") loadLeaderboards();
-  }, [self, browsing.replayVaultPlayer]);
+  }, [self, browsing.replayVaultPlayer, runRequestedSearch]);
+
+  // And for the request that arrives while this tab is already open.
+  useEffect(() => subscribeReplaySearch(() => { runRequestedSearch(); }), [runRequestedSearch]);
 
   // The listing has no map for a co-op game, so the replay files are asked
   // instead: the first 64 KiB of each, which is the envelope and enough of the
@@ -221,6 +240,10 @@ export function OnlineReplayView({ busy }: { busy: boolean }) {
           onWatch={(uid) => {
             setSelectedUid(uid);
             if (!busy) markWatchedAndPlay(uid);
+          }}
+          onDownload={(uid) => {
+            setSelectedUid(uid);
+            downloadVault(uid);
           }}
           onToggleWatched={(uid) => setWatchedMark(uid, !watchedUids.has(uid))}
         />

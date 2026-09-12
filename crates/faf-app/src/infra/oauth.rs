@@ -25,7 +25,7 @@ use rand::RngCore;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt as _, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -521,9 +521,34 @@ struct Redirect {
     error: Option<String>,
 }
 
-/// Accept a single loopback connection and parse the OAuth redirect from its
-/// request line, then send a minimal HTML page back to the browser.
+/// The longest request line the loopback listener will read.
+///
+/// An authorisation code and a state token are a few hundred bytes between
+/// them. Without a bound, a local process that connects first can hold the
+/// login open by never sending a newline, which the overall timeout caught but
+/// only after five minutes of looking hung.
+const MAX_REDIRECT_REQUEST_BYTES: u64 = 8 * 1024;
+
+/// Accept loopback connections until one carries the OAuth redirect, then send
+/// a minimal HTML page back to the browser.
+///
+/// A loop rather than a single `accept`: the port is on localhost, so any
+/// process on the machine can reach it, and whoever connects first used to
+/// decide whether the login worked. The state check below is what stops a
+/// stranger's request being *believed*; this is what stops it being the only
+/// one heard. The caller's `LOGIN_TIMEOUT` still bounds the whole wait.
 async fn accept_redirect(listener: &TcpListener) -> AuthResult<Redirect> {
+    loop {
+        match accept_one_redirect(listener).await {
+            Ok(redirect) => return Ok(redirect),
+            // A connection that said nothing useful is not the browser. Keep
+            // listening; the timeout is the thing that gives up.
+            Err(reason) => tracing::debug!(%reason, "ignoring a loopback connection"),
+        }
+    }
+}
+
+async fn accept_one_redirect(listener: &TcpListener) -> AuthResult<Redirect> {
     let (mut stream, _) = listener
         .accept()
         .await
@@ -531,7 +556,7 @@ async fn accept_redirect(listener: &TcpListener) -> AuthResult<Redirect> {
 
     // Read only the request line: that carries `?code=...&state=...`.
     let request_line = {
-        let mut reader = BufReader::new(&mut stream);
+        let mut reader = BufReader::new((&mut stream).take(MAX_REDIRECT_REQUEST_BYTES));
         let mut line = String::new();
         reader
             .read_line(&mut line)

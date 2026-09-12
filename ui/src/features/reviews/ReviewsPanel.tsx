@@ -11,6 +11,7 @@ import { Modal } from "../../design-system/Modal";
 import type { Review, ReviewSummary } from "../../ipc/bindings";
 import { ipc } from "../../ipc/client";
 import { useAppStore } from "../../store/store";
+import { t } from "../../i18n";
 import "./reviews.css";
 import { useTranslation } from "../../i18n/useTranslation";
 
@@ -30,7 +31,7 @@ function ownReview(reviews: Review[], login: string): Review | null {
 function Stars({ score, of = 5 }: { score: number; of?: number }) {
   const filled = Math.round(score);
   return (
-    <span className="review-stars" aria-label={`${score.toFixed(1)} out of ${of}`}>
+    <span className="review-stars" aria-label={t("reviews.scoreAria", { score: score.toFixed(1), of })}>
       {Array.from({ length: of }, (_, index) => (
         <span key={index} className={index < filled ? "is-filled" : undefined} aria-hidden="true">
           ★
@@ -80,14 +81,16 @@ export function ReviewsPanel() {
             <h3>
               {others.length === 0
                 ? t("reviews.noOthers")
-                : `${others.length} other review${others.length === 1 ? "" : "s"}`}
+                : t("reviews.otherReviews", { count: others.length })}
             </h3>
             {others.map((review) => (
               <article className="surface review-row" key={review.id}>
                 <header>
                   <strong>{review.player || t("reviews.unknownPlayer")}</strong>
                   <Stars score={review.score} />
-                  {review.version && <small className="muted">version {review.version}</small>}
+                  {review.version && (
+                    <small className="muted">{t("reviews.version", { version: review.version })}</small>
+                  )}
                 </header>
                 {review.text && <p>{review.text}</p>}
               </article>

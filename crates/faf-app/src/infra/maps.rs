@@ -42,7 +42,7 @@ use crate::infra::jsonapi::{
     JsonApiDoc, JsonApiResource,
 };
 use crate::infra::vault_install::{
-    bounded_body, install_archive, validate_url, MAX_DOWNLOAD_BYTES,
+    bounded_body_to_file, install_archive_from_file, validate_url, MAX_DOWNLOAD_BYTES,
 };
 use crate::infra::{env_or, GENERATED_MAP_PLACEHOLDER_URL};
 use crate::ports::{MapSearchPage, MapsPort};
@@ -196,9 +196,25 @@ impl MapsPort for MapsClient {
                 "include",
                 "mapPool.mapPoolAssignments.mapVersion.map,matchmakerQueue",
             )
+            // Validated, not escaped. Every other vault and replay filter runs
+            // through the escapers in `faf_domain::protocol`; this one
+            // interpolated a name that arrives over IPC straight into RSQL.
+            // A queue's technical name is `ladder_1v1` or `tmm_4v4_full_share`,
+            // so a whitelist says more than an escaper would and cannot be
+            // widened by accident.
             .append_pair(
                 "filter",
-                &format!("matchmakerQueue.technicalName=='{queue_name}'"),
+                &format!("matchmakerQueue.technicalName=='{}'", {
+                    if queue_name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                        && !queue_name.is_empty()
+                    {
+                        queue_name.clone()
+                    } else {
+                        return Err("that is not a matchmaker queue name".to_string());
+                    }
+                }),
             )
             .append_pair("page[size]", "100");
 
@@ -224,7 +240,16 @@ impl MapsPort for MapsClient {
         if !status.is_success() {
             return Err(format!("could not download map {folder_name}: {status}"));
         }
-        let bytes = bounded_body(resp, &format!("map {folder_name}"), MAX_DOWNLOAD_BYTES).await?;
+        // To a file, not to a `Vec`: a map is allowed to be half a gigabyte,
+        // and the zip reader only ever seeks around the archive. The handle
+        // deletes the file when it drops, including on the error paths below.
+        let archive = bounded_body_to_file(
+            resp,
+            &format!("map {folder_name}"),
+            MAX_DOWNLOAD_BYTES,
+            &|_, _| {},
+        )
+        .await?;
 
         let dest = maps_dir();
         tokio::fs::create_dir_all(&dest)
@@ -233,11 +258,15 @@ impl MapsPort for MapsClient {
 
         let dest_clone = dest.clone();
         let expected_folder = folder_name.clone();
+        let archive_path = archive.path().to_path_buf();
         tokio::task::spawn_blocking(move || {
-            install_archive(&bytes, &dest_clone, Some(&expected_folder), |_| Ok(()))
+            install_archive_from_file(&archive_path, &dest_clone, Some(&expected_folder), |_| {
+                Ok(())
+            })
         })
         .await
         .map_err(|e| format!("extraction task panicked: {e}"))??;
+        drop(archive);
 
         list_installed_dir(&dest).await
     }

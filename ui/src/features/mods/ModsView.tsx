@@ -2,9 +2,10 @@
 // the catalogue and filesystem/game.prefs state; this view derives only the
 // current search, filters, sorting and selection.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../../design-system/Button";
 import { SectionTabs } from "../../design-system/SectionTabs";
+import { DEFAULT_VAULT_PAGE_SIZE } from "../../shared/browsingPreferences";
 import { Icon } from "../../design-system/Icon";
 import { EmptyState } from "../../design-system/EmptyState";
 import { RangeSlider } from "../../design-system/RangeSlider";
@@ -30,7 +31,6 @@ import { InstalledModsView } from "./InstalledModsView";
 // that is already installed, and `openUploadFromDisk` takes an archive straight
 // off the filesystem, which is what an author has after building one.
 import { openUploadFromDisk } from "../uploads/UploadDialog";
-import { useUploadIntro } from "../uploads/UploadIntroDialog";
 import { ModRenameDialog } from "./ModRenameDialog";
 import { requestModVaultFocus, takeModVaultFocus } from "./modVaultFocus";
 import { modUpdateAvailable } from "./modVersions";
@@ -46,7 +46,18 @@ type InstallFilter = "all" | "installed" | "available" | "updates";
 type ModPreset = "recommended" | "favorites" | "mine" | "rating" | "ui" | "newest" | "all";
 type DateField = "updated" | "uploaded";
 
-const PAGE_SIZE = 36;
+const MOD_SORTS: readonly ModSort[] = ["rating", "newest", "updated", "name"];
+
+/** The sort a preset brings with it when nothing else has been chosen. */
+function presetSort(preset: ModPreset): ModSort {
+  if (preset === "newest" || preset === "mine") return "newest";
+  if (preset === "all") return "name";
+  return "rating";
+}
+
+function storedModSort(value: string): ModSort | null {
+  return (MOD_SORTS as readonly string[]).includes(value) ? (value as ModSort) : null;
+}
 const MOD_PRESETS: Array<[ModPreset, MessageKey]> = [
   ["recommended", "mods.view.preset.recommended"],
   ["favorites", "mods.view.preset.favorites"],
@@ -88,6 +99,7 @@ function modVaultQuery(
   preset: ModPreset,
   page: number,
   playerId: number | null,
+  pageSize: number,
 ): ModVaultQuery {
   const sortBy: ModVaultQuery["sortBy"] = applied.sort === "newest" ? "newest"
     : applied.sort === "updated" ? "updated"
@@ -116,7 +128,7 @@ function modVaultQuery(
     sortBy,
     sortDescending: sortBy !== "name",
     page,
-    pageSize: PAGE_SIZE,
+    pageSize,
   };
 }
 
@@ -124,7 +136,6 @@ function VaultView({ busy }: { busy: boolean }) {
   // The Upload button opens this first. Pressing it used to put an OS
   // file browser on screen immediately, which for anyone streaming is
   // their filesystem in front of an audience.
-  const uploadIntro = useUploadIntro("mod", () => void openUploadFromDisk("mod"));
   const { t } = useTranslation();
   const vault = useAppStore((state) => state.state.mods.vault);
   const vaultStatus = useAppStore((state) => state.state.mods.vaultStatus);
@@ -144,11 +155,9 @@ function VaultView({ busy }: { busy: boolean }) {
   const playerId = useAppStore((state) => state.state.auth.player?.id ?? null);
   const storedPreset = (browsing.modVaultPreset as ModPreset) || "recommended";
   const preset: ModPreset = storedPreset === "mine" && playerId === null ? "recommended" : storedPreset;
-  const initialSort: ModSort = (() => {
-    if (preset === "newest" || preset === "mine") return "newest";
-    if (preset === "all") return "name";
-    return "rating";
-  })();
+  // The sort survives leaving the tab. See the twin in MapsView for why.
+  const initialSort: ModSort = storedModSort(browsing.modVaultSort) ?? presetSort(preset);
+  const pageSize = browsing.vaultPageSize || DEFAULT_VAULT_PAGE_SIZE;
   const [search, setSearch] = useState("");
   const [exactName, setExactName] = useState(false);
   const [sort, setSort] = useState<ModSort>(initialSort);
@@ -221,19 +230,18 @@ function VaultView({ busy }: { busy: boolean }) {
     if (mods.installedStatus.type === "idle") loadInstalled();
   }, []);
 
+  // Only on a change of preset, never on mount, so the remembered sort is not
+  // overwritten the moment the tab comes back.
+  //
+  // "My mods" has no ranking of its own worth defaulting to, and newest first
+  // is what an uploader wants: the release they just pushed.
+  const lastPreset = useRef(preset);
   useEffect(() => {
-    // "My mods" has no ranking of its own worth defaulting to, and newest
-    // first is what an uploader wants: the release they just pushed.
-    if (preset === "newest" || preset === "mine") {
-      setSort("newest");
-      setApplied((prev) => ({ ...prev, sort: "newest" }));
-    } else if (preset === "all") {
-      setSort("name");
-      setApplied((prev) => ({ ...prev, sort: "name" }));
-    } else if (preset === "recommended" || preset === "rating" || preset === "ui" || preset === "favorites") {
-      setSort("rating");
-      setApplied((prev) => ({ ...prev, sort: "rating" }));
-    }
+    if (lastPreset.current === preset) return;
+    lastPreset.current = preset;
+    const next = presetSort(preset);
+    setSort(next);
+    setApplied((prev) => ({ ...prev, sort: next }));
   }, [preset]);
 
   const applySearch = () => {
@@ -261,6 +269,15 @@ function VaultView({ busy }: { busy: boolean }) {
     setSort(nextSort);
     setApplied((prev) => ({ ...prev, sort: nextSort }));
     setPage(1);
+    if (browsing.modVaultSort !== nextSort) {
+      ipc.send({
+        kind: "Settings",
+        command: {
+          type: "setBrowsing",
+          payload: { preferences: { ...browsing, modVaultSort: nextSort } },
+        },
+      });
+    }
   };
 
   const choosePreset = (next: ModPreset) => {
@@ -271,10 +288,15 @@ function VaultView({ busy }: { busy: boolean }) {
     setSort(nextSort);
     setApplied((prev) => ({ ...prev, sort: nextSort }));
     setPage(1);
-    if (browsing.modVaultPreset !== next) {
+    if (browsing.modVaultPreset !== next || browsing.modVaultSort !== "") {
       ipc.send({
         kind: "Settings",
-        command: { type: "setBrowsing", payload: { preferences: { ...browsing, modVaultPreset: next } } },
+        command: {
+          type: "setBrowsing",
+          // A preset brings its own order, so choosing one clears the
+          // remembered sort rather than fighting it on the next load.
+          payload: { preferences: { ...browsing, modVaultPreset: next, modVaultSort: "" } },
+        },
       });
     }
   };
@@ -316,8 +338,8 @@ function VaultView({ busy }: { busy: boolean }) {
   // Server-side search, as in both reference clients: the filters go out as a
   // query and one page comes back.
   const query = useMemo(
-    () => modVaultQuery(applied, preset, page, playerId),
-    [applied, preset, page, playerId],
+    () => modVaultQuery(applied, preset, page, playerId, pageSize),
+    [applied, preset, page, playerId, pageSize],
   );
 
   useEffect(() => {
@@ -348,11 +370,11 @@ function VaultView({ busy }: { busy: boolean }) {
   // Same rule as the Maps tab: the count in state describes the search it came
   // back with, not the one whose results are still on their way.
   const totalPages = localFavorites
-    ? Math.max(1, Math.ceil(favorites.length / PAGE_SIZE))
+    ? Math.max(1, Math.ceil(favorites.length / pageSize))
     : (sameVaultSearch(browseQuery, query) ? browseTotalPages ?? 1 : 1);
   const currentPage = Math.min(page, totalPages);
   const pageMods = localFavorites
-    ? results.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+    ? results.slice((currentPage - 1) * pageSize, currentPage * pageSize)
     : results;
   const selected = pageMods.find((mod) => mod.uid === selectedUid) ?? pageMods[0] ?? null;
   const hiddenFilterCount = Number(installFilter !== "all")
@@ -360,8 +382,7 @@ function VaultView({ busy }: { busy: boolean }) {
 
   return (
     <>
-      {uploadIntro.dialog}
-      <SearchPanel
+            <SearchPanel
         className="mod-search-panel"
         onSubmit={(event) => {
           event.preventDefault();
@@ -395,7 +416,7 @@ function VaultView({ busy }: { busy: boolean }) {
             >
               <Icon name="refresh" size={15} /> {t("mods.view.refresh")}
             </Button>
-            <Button onClick={uploadIntro.start}><Icon name="plus" size={15} /> {t("mods.view.uploadFromDisk")}</Button>
+            <Button onClick={void openUploadFromDisk("mod")}><Icon name="plus" size={15} /> {t("mods.view.uploadFromDisk")}</Button>
                       </>
         )}
         advanced={filtersOpen ? (

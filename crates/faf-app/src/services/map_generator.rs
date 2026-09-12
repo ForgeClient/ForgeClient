@@ -335,9 +335,18 @@ pub(crate) async fn record_generated_maps(maps: &[String], ctx: &ServiceCtx, out
         return;
     }
     if out.with_state(|state| state.settings.game.keep_generated_maps) {
+        let before = out.with_state(|state| state.settings.kept_generated_maps.clone());
         out.emit(SettingsEvent::KeptGeneratedMaps {
             map_names: maps.to_vec(),
         });
+        let after = out.with_state(|state| state.settings.kept_generated_maps.clone());
+        // The keep list is capped, and a name that falls off it is a map
+        // nobody asked to keep any more. Removing it here rather than leaving
+        // it merely unprotected is the whole point of the cap: the thread that
+        // asked for one had watched a generated-map folder fill a system
+        // drive, and an unprotected map still occupies the disk until somebody
+        // remembers to sweep.
+        evict_generated_maps(&before, &after, ctx, out).await;
         services::settings::persist(ctx, out).await;
     }
     let previews = ctx.ports.map_generator.map_previews(maps).await;
@@ -345,6 +354,47 @@ pub(crate) async fn record_generated_maps(maps: &[String], ctx: &ServiceCtx, out
         out.emit(MapGeneratorEvent::PreviewsLoaded { previews });
     }
     refresh_installed_maps(ctx, out).await;
+}
+
+/// Delete the map folders that the keep list's cap pushed out.
+///
+/// Names only, and only ones the list itself dropped: this never touches a map
+/// the user still has on the list, a favourite, or anything that was not
+/// generated, because it acts on the difference between two states of one
+/// list rather than on a scan of the folder.
+async fn evict_generated_maps(
+    before: &[String],
+    after: &[String],
+    ctx: &ServiceCtx,
+    out: &EventSink,
+) {
+    let kept: std::collections::HashSet<String> =
+        after.iter().map(|name| name.to_ascii_lowercase()).collect();
+    let evicted: Vec<String> = before
+        .iter()
+        .filter(|name| !kept.contains(&name.to_ascii_lowercase()))
+        .cloned()
+        .collect();
+    if evicted.is_empty() {
+        return;
+    }
+    for name in &evicted {
+        if let Err(reason) = ctx.ports.maps.uninstall_map(name.clone()).await {
+            // Not a failure worth stopping the run for: the map is off the
+            // keep list either way, so the next manual sweep will collect it.
+            tracing::warn!(map = %name, %reason, "could not remove a capped generated map");
+        }
+    }
+    services::notifications::add(
+        out,
+        NotificationKind::MapGenerated,
+        "Generated maps trimmed",
+        format!(
+            "Removed {} older generated map(s) to stay within the keep limit.",
+            evicted.len()
+        ),
+        None,
+    );
 }
 
 /// Re-read the whole preset library and publish it.

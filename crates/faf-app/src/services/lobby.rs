@@ -71,6 +71,17 @@ pub async fn handle(cmd: LobbyCommand, ctx: &ServiceCtx, out: &EventSink) {
                 return;
             }
 
+            // A host who enforced a rating range meant it. The server hides
+            // such a lobby from out-of-range players, but a game already on
+            // the list when the range was set, or reached from a link, still
+            // gets this far, and preparing a join for minutes before the
+            // server refuses it is the worst of both.
+            if let Some(reason) = out.with_state(|state| rating_gate_refusal(state, id)) {
+                ctx.lobby_join_active.finish();
+                out.emit(LobbyEvent::JoinFailed { id, reason });
+                return;
+            }
+
             out.emit(LobbyEvent::Joining {
                 id,
                 prepared: false,
@@ -457,6 +468,46 @@ async fn handle_update(
             }
             out.emit(LobbyEvent::LiveGamesUpdated { games })
         }
+        LobbyUpdate::GamesChanged { upserted, removed } => {
+            // Only the two fields the signals need, and only when there is a
+            // signal to work out: this runs on the lobby's hottest frame.
+            if !upserted.is_empty() || !removed.is_empty() {
+                let (preferences, player_name) = out.with_state(|state| {
+                    (
+                        state.settings.notifications.clone(),
+                        state.auth.player.as_ref().map(|player| player.name.clone()),
+                    )
+                });
+                for signal in game_notifications.observe_open_delta(
+                    &upserted,
+                    &removed,
+                    player_name.as_deref(),
+                ) {
+                    notify_game_signal(out, &preferences, signal);
+                }
+            }
+            out.emit(LobbyEvent::GamesChanged { upserted, removed });
+        }
+        LobbyUpdate::LiveGamesChanged { upserted, removed } => {
+            if !upserted.is_empty() || !removed.is_empty() {
+                let (preferences, friends, player_name) = out.with_state(|state| {
+                    (
+                        state.settings.notifications.clone(),
+                        state.social.friends.clone(),
+                        state.auth.player.as_ref().map(|player| player.name.clone()),
+                    )
+                });
+                for signal in game_notifications.observe_live_delta(
+                    &upserted,
+                    &removed,
+                    &friends,
+                    player_name.as_deref(),
+                ) {
+                    notify_game_signal(out, &preferences, signal);
+                }
+            }
+            out.emit(LobbyEvent::LiveGamesChanged { upserted, removed });
+        }
         LobbyUpdate::MatchmakerQueues(queues) => {
             out.emit(LobbyEvent::MatchmakerQueuesUpdated { queues })
         }
@@ -765,6 +816,104 @@ impl GameNotificationTracker {
             .is_some_and(|until| Instant::now() < until)
     }
 
+    /// The delta twin of [`Self::observe_open`].
+    ///
+    /// The tracker keeps its own index precisely so that a change can be read
+    /// without being handed the whole list again. Before the first snapshot
+    /// there is nothing to compare against, so a delta only primes the index,
+    /// which is what the snapshot path does on its own first call too.
+    fn observe_open_delta(
+        &mut self,
+        upserted: &[Game],
+        removed: &[i32],
+        player_name: Option<&str>,
+    ) -> Vec<GameNotificationSignal> {
+        let Some(index) = self.open.as_mut() else {
+            return Vec::new();
+        };
+        let suppressed = self
+            .suppress_until
+            .is_some_and(|until| Instant::now() < until);
+
+        let mut signals = Vec::new();
+        for game in upserted {
+            let previous = index.insert(game.id, game.clone());
+            if suppressed {
+                continue;
+            }
+            match previous {
+                None => signals.push(GameNotificationSignal::NewGame(game.clone())),
+                Some(old) => {
+                    if let Some(player_name) = player_name {
+                        if old.host.eq_ignore_ascii_case(player_name)
+                            && old.players < old.max_players
+                            && game.players >= game.max_players
+                        {
+                            signals.push(GameNotificationSignal::GameFull(game.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        for id in removed {
+            index.remove(id);
+        }
+        signals
+    }
+
+    /// The delta twin of [`Self::observe_live`].
+    ///
+    /// A game leaving the live list is what "your game ended" means, so the
+    /// removals are read before they are applied.
+    fn observe_live_delta(
+        &mut self,
+        upserted: &[Game],
+        removed: &[i32],
+        friends: &[String],
+        player_name: Option<&str>,
+    ) -> Vec<GameNotificationSignal> {
+        let Some(index) = self.live.as_mut() else {
+            return Vec::new();
+        };
+        let suppressed = self
+            .suppress_until
+            .is_some_and(|until| Instant::now() < until);
+
+        let mut signals = Vec::new();
+        for game in upserted {
+            let previous = index.insert(game.id, game.clone());
+            if suppressed || previous.is_some() {
+                continue;
+            }
+            let mut game_friends = Vec::new();
+            for login in participants(game) {
+                if contains_name(friends, login) && !contains_name(&game_friends, login) {
+                    game_friends.push(login.to_owned());
+                }
+            }
+            if !game_friends.is_empty() {
+                signals.push(GameNotificationSignal::FriendsPlaying {
+                    logins: game_friends,
+                    game: game.clone(),
+                });
+            }
+        }
+        for id in removed {
+            let Some(gone) = index.remove(id) else {
+                continue;
+            };
+            if suppressed {
+                continue;
+            }
+            if let Some(player_name) = player_name {
+                if game_has_player(&gone, player_name) {
+                    signals.push(GameNotificationSignal::OwnGameEnded(gone));
+                }
+            }
+        }
+        signals
+    }
+
     fn observe_open(
         &mut self,
         games: &[Game],
@@ -935,6 +1084,40 @@ fn game_has_player(game: &Game, player_name: &str) -> bool {
         || participants(game).any(|name| name.eq_ignore_ascii_case(player_name))
 }
 
+/// Why this account may not join game `id`, or `None` when nothing stops it.
+///
+/// Reads the same three facts the lobby server reads in
+/// `Game.is_visible_to_player`: the host's flag, the host's bounds, and this
+/// player's displayed rating on the board the game is played for.
+fn rating_gate_refusal(state: &faf_domain::AppState, id: i32) -> Option<String> {
+    let game = state.lobby.games.iter().find(|game| game.id == id)?;
+    if !game.enforce_rating_range {
+        return None;
+    }
+    let player = state.auth.player.as_ref()?;
+    let profile = state
+        .social
+        .players
+        .iter()
+        .find(|profile| profile.login.eq_ignore_ascii_case(&player.name))?;
+    let rating = faf_domain::state::rating_for_game(profile, game)?;
+    if !faf_domain::state::rating_gate_blocks(game, Some(rating)) {
+        return None;
+    }
+    Some(match (game.rating_min, game.rating_max) {
+        (Some(minimum), Some(maximum)) => format!(
+            "this lobby is limited to ratings {minimum} to {maximum}, and yours is {rating}"
+        ),
+        (Some(minimum), None) => {
+            format!("this lobby is limited to ratings {minimum} and above, and yours is {rating}")
+        }
+        (None, Some(maximum)) => {
+            format!("this lobby is limited to ratings {maximum} and below, and yours is {rating}")
+        }
+        (None, None) => "this lobby enforces a rating range you are outside of".to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -959,6 +1142,7 @@ mod tests {
             hosted_at: None,
             rating_min: None,
             rating_max: None,
+            enforce_rating_range: false,
             teams: BTreeMap::from([(
                 "1".into(),
                 players.iter().map(|name| (*name).to_owned()).collect(),

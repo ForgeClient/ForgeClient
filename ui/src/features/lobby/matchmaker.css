@@ -1175,3 +1175,63 @@
   padding: var(--space-3) var(--space-4) var(--space-4);
   border-top: 1px solid var(--color-border);
 }
+
+/* The queue's rating breakdown, on hover over "n queued".
+   A pure-CSS popover rather than a portal: it lives inside the card's own
+   button, so anything focusable in here would be a control inside a control.
+   `pointer-events: none` keeps it from eating the click that selects the
+   queue. */
+.matchmaker-queue-queued {
+  position: relative;
+}
+
+.matchmaker-queue-breakdown {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  display: grid;
+  gap: 2px;
+  min-width: 160px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  font-size: 12px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 100ms ease;
+}
+
+.matchmaker-queue-queued:hover .matchmaker-queue-breakdown {
+  opacity: 1;
+}
+
+.matchmaker-queue-breakdown b {
+  margin-bottom: 2px;
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 550;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+.matchmaker-queue-breakdown > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.matchmaker-queue-breakdown em {
+  color: var(--color-text);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.matchmaker-queue-breakdown i {
+  color: var(--color-muted);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}

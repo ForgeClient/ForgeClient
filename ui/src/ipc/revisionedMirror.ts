@@ -9,11 +9,24 @@ import type { FrontendMessage, VersionedSnapshot } from "./client";
  * and a lag-recovery snapshot replaces the mirror before subsequent messages
  * from the same ordered channel are applied.
  */
+/**
+ * How long a recovery snapshot has to settle before another one is asked for.
+ *
+ * A gap means the client is already behind, and the answer to a gap is a whole
+ * `AppState`: megabytes of JSON, requested at exactly the worst moment. Two
+ * gaps in a row used to mean two of them. A short floor turns a burst of gaps
+ * into one refetch, and the events that arrive meanwhile are buffered by
+ * revision anyway, so nothing is lost by waiting.
+ */
+const RECOVERY_COOLDOWN_MS = 750;
+
 export class RevisionedMirror {
   private revision: number | null = null;
   private pending = new Map<number, AppEvent>();
   private recoveryInFlight = false;
   private recoveryRequested = false;
+  private lastRecoveryAt = 0;
+  private cooldownTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly hydrate: (state: AppState) => void,
@@ -89,13 +102,28 @@ export class RevisionedMirror {
       this.recoveryRequested = true;
       return;
     }
+    // Rate limited, not skipped: a gap that is still there after the cooldown
+    // is still recovered, one refetch later.
+    const since = Date.now() - this.lastRecoveryAt;
+    if (since < RECOVERY_COOLDOWN_MS) {
+      this.recoveryRequested = true;
+      if (this.cooldownTimer === null) {
+        this.cooldownTimer = setTimeout(() => {
+          this.cooldownTimer = null;
+          if (this.recoveryRequested) this.requestRecovery();
+        }, RECOVERY_COOLDOWN_MS - since);
+      }
+      return;
+    }
     this.recoveryInFlight = true;
     this.recoveryRequested = false;
+    this.lastRecoveryAt = Date.now();
     void this.resnapshot()
       .then((snapshot) => this.replace(snapshot))
       .catch((error: unknown) => this.onRecoveryError?.(error))
       .finally(() => {
         this.recoveryInFlight = false;
+        this.lastRecoveryAt = Date.now();
         if (this.recoveryRequested) this.requestRecovery();
       });
   }

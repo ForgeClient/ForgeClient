@@ -41,7 +41,6 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-use crate::infra::env_or;
 use crate::infra::vault_install::MAX_DOWNLOAD_BYTES;
 use crate::ports::{GeneratorUpdate, MapGeneratorPort};
 
@@ -159,11 +158,12 @@ pub struct MapGeneratorConfig {
 impl MapGeneratorConfig {
     pub fn faf() -> Self {
         Self {
-            releases_url: env_or(
+            // Both name a server whose bytes are handed to a JVM.
+            releases_url: crate::infra::dev_env_or(
                 "FAF_MAP_GENERATOR_RELEASES_URL",
                 "https://api.github.com/repos/FAForever/Neroxis-Map-Generator/releases",
             ),
-            download_url_format: env_or(
+            download_url_format: crate::infra::dev_env_or(
                 "FAF_MAP_GENERATOR_DOWNLOAD_URL",
                 "https://github.com/FAForever/Neroxis-Map-Generator/releases/download/{version}/NeroxisGen_{version}.jar",
             ),
@@ -266,8 +266,10 @@ impl NeroxisMapGenerator {
     pub fn new(config: MapGeneratorConfig) -> Self {
         Self {
             config,
-            // The shared transport supplies the User-Agent GitHub requires.
-            http: super::http::shared_http_client(),
+            // Carries the User-Agent GitHub requires, and refuses a redirect
+            // that leaves HTTPS: these bytes are handed to a JVM, and the
+            // decision not to sign them rests on the connection staying HTTPS.
+            http: super::http::https_only_download_client(),
             cancel: Arc::new(CancelSignal::default()),
             installing: Arc::new(tokio::sync::Mutex::new(())),
             releases: Arc::new(tokio::sync::Mutex::new(None)),

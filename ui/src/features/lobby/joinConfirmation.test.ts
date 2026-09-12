@@ -20,6 +20,7 @@ function game(simMods: Record<string, string>): Game {
     hostedAt: null,
     ratingMin: null,
     ratingMax: null,
+    enforceRatingRange: false,
     teams: {},
     simMods,
   };

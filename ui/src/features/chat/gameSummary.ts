@@ -1,5 +1,9 @@
 import type { Game, PlayerProfile, SocialState } from "../../ipc/bindings";
 import { displayedRating, gameLeaderboard } from "../../shared/playerRatings";
+// One definition, imported rather than repeated. It was 300 here and
+// `5 * 60` there, which is the same number until somebody changes one of
+// them; the server enforces the rule and both of these only draw it.
+import { LIVE_REPLAY_DELAY_SECONDS } from "../replays/liveReplayModel";
 
 export type GamePresenceStatus = "hosting" | "lobbying" | "playing" | "playingDelayed";
 
@@ -37,8 +41,6 @@ const loginKey = (login: string) => login.toLocaleLowerCase();
 // once per player of every open game, plus once per entry of the whole player
 // directory when resolving a roster.
 const sameLogin = (left: string, right: string) => loginKey(left) === loginKey(right);
-
-export const LIVE_REPLAY_DELAY_SECONDS = 300;
 
 export function isLiveReplayDelayed(
   launchedAt: number | null | undefined,

@@ -90,6 +90,22 @@ describe("RevisionedMirror", () => {
     await vi.waitFor(() => expect(resnapshot).toHaveBeenCalledOnce());
   });
 
+  it("does not ask for a second snapshot straight after the first", async () => {
+    // A gap means the client is already behind, and a snapshot is megabytes.
+    // Two gaps in quick succession used to mean two of them, which is the
+    // lag cascade the cooldown exists to break.
+    const resnapshot = vi.fn().mockResolvedValue({ revision: 2, state: snapshotState });
+    const mirror = new RevisionedMirror(vi.fn(), vi.fn(), resnapshot);
+
+    mirror.replace({ revision: 1, state: snapshotState });
+    mirror.receive({ kind: "event", revision: 3, event: connecting });
+    await vi.waitFor(() => expect(resnapshot).toHaveBeenCalledOnce());
+
+    mirror.receive({ kind: "event", revision: 9, event: disconnected });
+    // Still one: the second gap is remembered, not refetched immediately.
+    expect(resnapshot).toHaveBeenCalledOnce();
+  });
+
   it("reports recovery failures without applying the out-of-order event", async () => {
     const apply = vi.fn();
     const onError = vi.fn();

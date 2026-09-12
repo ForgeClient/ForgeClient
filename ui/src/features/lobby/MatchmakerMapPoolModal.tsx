@@ -18,9 +18,16 @@ function formatMapSize(width: number, height: number) {
 
 function bracketTitle(pool: MatchmakerMapPool) {
   if (pool.minRating === null && pool.maxRating === null) return t("lobby.mapPool.anyRating");
-  if (pool.minRating === null) return `Rating < ${Math.ceil(pool.maxRating ?? 0)}`;
-  if (pool.maxRating === null) return `Rating > ${Math.floor(pool.minRating)}`;
-  return `Rating ${Math.round(pool.minRating)}–${Math.round(pool.maxRating)}`;
+  if (pool.minRating === null) {
+    return t("lobby.mapPool.ratingBelow", { rating: Math.ceil(pool.maxRating ?? 0) });
+  }
+  if (pool.maxRating === null) {
+    return t("lobby.mapPool.ratingAbove", { rating: Math.floor(pool.minRating) });
+  }
+  return t("lobby.mapPool.ratingBetween", {
+    from: Math.round(pool.minRating),
+    to: Math.round(pool.maxRating),
+  });
 }
 
 export function findMatchingBracket(
@@ -200,7 +207,10 @@ export function MatchmakerMapPoolModal({
         ) : (
           <div
             className="matchmaker-token-wallet"
-            aria-label={`${tokensUsed} of ${tokenLimit} vetoes used`}
+            aria-label={t("lobby.mapPool.vetoesUsedAria", {
+              used: tokensUsed,
+              limit: tokenLimit,
+            })}
           >
             {Array.from({ length: tokenLimit }, (_, index) => (
               <i key={index} className={index < tokensUsed ? "used" : ""} />

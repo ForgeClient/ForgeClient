@@ -21,11 +21,16 @@ use tokio::sync::mpsc;
 
 use crate::infra::jsonrpc::{JsonRpcClient, RpcNotification};
 use crate::infra::session::TokenStore;
-use crate::infra::{console_window, free_port};
+use crate::infra::{console_window, free_ports};
 use crate::ports::{ConnectivitySession, IceDebugWindows, IceParams, IcePort, RelayMsg};
 
 /// How long to wait for the adapter's RPC port to come up.
 const RPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How many times a start is attempted before the ports are treated as the
+/// user's problem rather than a race. Three is enough for a collision that
+/// happens by chance and few enough that a machine with genuinely no free
+/// ports still fails promptly.
+const PORT_ATTEMPTS: u32 = 3;
 
 #[derive(Debug, Clone)]
 pub struct JavaConfig {
@@ -57,21 +62,10 @@ fn default_jar_path() -> String {
         }
     }
 
-    let executable = std::env::current_exe().ok();
-    let working_directory = std::env::current_dir().ok();
-    let roots = executable
-        .as_deref()
-        .and_then(Path::parent)
-        .into_iter()
-        .flat_map(|directory| directory.ancestors().take(4))
-        .chain(
-            working_directory
-                .as_deref()
-                .into_iter()
-                .flat_map(|directory| directory.ancestors().take(3)),
-        )
-        .map(Path::to_path_buf)
-        .collect::<Vec<_>>();
+    // Never the working directory: see `infra::helper_search_roots`. This jar
+    // is handed to a JVM, so a stray copy in a folder the client was started
+    // from is code execution.
+    let roots = crate::infra::helper_search_roots();
 
     resolve_jar_from_roots(&roots)
         .map(|path| path.to_string_lossy().into_owned())
@@ -158,23 +152,18 @@ impl JavaAdapter {
     }
 }
 
-#[async_trait]
-impl IcePort for JavaAdapter {
-    async fn start(&self, params: IceParams) -> Result<ConnectivitySession, String> {
-        let Some(token) = self.tokens.get() else {
-            return Err("no access token (not logged in?)".into());
-        };
-        if self.config.jar_path.is_empty() {
-            return Err("the optional Java ICE adapter is not installed".into());
-        }
-
-        // ICE servers (the Java adapter doesn't fetch these itself).
-        let ice =
-            fetch_ice_servers(&self.http, &self.config.api_base, &token, params.game_id).await?;
-
-        let rpc_port = free_port().ok_or("could not reserve an rpc port")?;
-        let gpg_port = free_port().ok_or("could not reserve a game port")?;
-
+impl JavaAdapter {
+    /// One attempt at starting the adapter on a given pair of ports.
+    ///
+    /// Split out so the caller can have another go: see the note at the call
+    /// site about what `free_ports` can and cannot promise.
+    async fn spawn_and_connect(
+        &self,
+        params: &IceParams,
+        ice: &IceServers,
+        rpc_port: u16,
+        gpg_port: u16,
+    ) -> Result<(JsonRpcClient, mpsc::Receiver<RpcNotification>), String> {
         let mut args: Vec<String> = vec![
             "-jar".into(),
             self.config.jar_path.clone(),
@@ -240,9 +229,64 @@ impl IcePort for JavaAdapter {
             drop(prev);
         }
 
-        // JSON-RPC control channel.
-        let (rpc, mut notifications) =
-            JsonRpcClient::connect("127.0.0.1", rpc_port, RPC_CONNECT_TIMEOUT).await?;
+        // JSON-RPC control channel. A refusal here is usually the adapter
+        // having failed to bind one of the ports it was handed, so the caller
+        // takes the child with it: leaving a JVM alive that cannot be spoken
+        // to would strand a process per attempt.
+        match JsonRpcClient::connect("127.0.0.1", rpc_port, RPC_CONNECT_TIMEOUT).await {
+            Ok(connected) => Ok(connected),
+            Err(reason) => {
+                if let Some(mut failed) = self.child.lock().unwrap().take() {
+                    let _ = failed.start_kill();
+                }
+                Err(reason)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl IcePort for JavaAdapter {
+    async fn start(&self, params: IceParams) -> Result<ConnectivitySession, String> {
+        let Some(token) = self.tokens.get() else {
+            return Err("no access token (not logged in?)".into());
+        };
+        if self.config.jar_path.is_empty() {
+            return Err("the optional Java ICE adapter is not installed".into());
+        }
+
+        // ICE servers (the Java adapter doesn't fetch these itself).
+        let ice =
+            fetch_ice_servers(&self.http, &self.config.api_base, &token, params.game_id).await?;
+
+        // Reserving a port means binding it and letting it go, so the numbers
+        // are free when they are chosen and not necessarily when the adapter
+        // binds them a moment later. Losing that race cost a fifteen second
+        // wait on the RPC connect and then a join that failed with nothing in
+        // the log to say why, so it is worth another go with fresh numbers.
+        let mut attempt = 0;
+        let (gpg_port, rpc, mut notifications) = loop {
+            attempt += 1;
+            // Both at once, so they cannot come back as the same number: see
+            // `infra::free_ports`.
+            let ports = free_ports(2).ok_or("could not reserve the adapter's ports")?;
+            let (rpc_port, gpg_port) = (ports[0], ports[1]);
+            match self
+                .spawn_and_connect(&params, &ice, rpc_port, gpg_port)
+                .await
+            {
+                Ok((rpc, notifications)) => break (gpg_port, rpc, notifications),
+                Err(reason) if attempt < PORT_ATTEMPTS => tracing::warn!(
+                    attempt,
+                    rpc_port,
+                    gpgnet_port = gpg_port,
+                    %reason,
+                    "the ICE adapter did not answer on the ports it was given; retrying"
+                ),
+                Err(reason) => return Err(reason),
+            }
+        };
+
         rpc.call("setIceServers", vec![Value::Array(ice.servers)]);
         rpc.call(
             "setLobbyInitMode",

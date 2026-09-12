@@ -50,9 +50,24 @@ pub enum LobbyUpdate {
     /// [`Self::Authenticated`] means the replacement is up.
     Reconnecting,
     /// A fresh full snapshot of the open-games list.
+    ///
+    /// Sent when the list is being *replaced*: the server's opening dump, and
+    /// the first frames after a reconnect. Incremental changes go through
+    /// [`Self::GamesChanged`] instead.
     Games(Vec<Game>),
     /// A fresh full snapshot of the in-progress ("playing") games list.
     LiveGames(Vec<Game>),
+    /// Games that appeared, changed or left the open list since the last
+    /// update. See `faf_domain::state::lobby::LobbyEvent::GamesChanged`.
+    GamesChanged {
+        upserted: Vec<Game>,
+        removed: Vec<i32>,
+    },
+    /// The same, for the in-progress list.
+    LiveGamesChanged {
+        upserted: Vec<Game>,
+        removed: Vec<i32>,
+    },
     MatchmakerQueues(Vec<MatchmakerQueue>),
     Matchmaking(MatchmakingState),
     Party(PartyState),

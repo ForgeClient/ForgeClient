@@ -188,22 +188,45 @@ impl IrcClient {
 
     /// Push a raw IRC line onto the live connection's outgoing channel.
     /// Returns `false` if there is no active connection.
+    ///
+    /// `try_send` rather than an awaited send: this is called from paths that
+    /// cannot block, and a line dropped because the queue is full is better
+    /// than a stalled reader. The callers check the answer; what was missing
+    /// is a record of the drop, so a reconnect that loses a burst of JOINs
+    /// leaves something behind to read.
     fn send_line(&self, line: String) -> bool {
-        self.outgoing
+        let sent = self
+            .outgoing
             .lock()
             .unwrap()
             .as_ref()
             .map(|tx| tx.try_send(line).is_ok())
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if !sent {
+            tracing::warn!("dropped an outgoing IRC line: no connection, or the queue is full");
+        }
+        sent
     }
 
+    /// Push a locally generated update (an echo of your own message, a JOIN or
+    /// a TOPIC line) towards the service.
+    ///
+    /// Most callers ignore the answer, which is why the warning is here rather
+    /// than left to them: a burst on reconnect across many channels is exactly
+    /// when this fills, and the symptom is a missing line in a chat log with
+    /// nothing anywhere to say it happened.
     fn push(&self, update: ChatUpdate) -> bool {
-        self.updates
+        let sent = self
+            .updates
             .lock()
             .unwrap()
             .as_ref()
             .map(|tx| tx.try_send(update).is_ok())
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if !sent {
+            tracing::warn!("dropped a local chat update: no connection, or the queue is full");
+        }
+        sent
     }
 
     /// Send a `TAGMSG` carrying client tags, if the server granted

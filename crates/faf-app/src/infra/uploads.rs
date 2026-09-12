@@ -81,6 +81,17 @@ impl UploadsClient {
 
 #[async_trait]
 impl UploadsPort for UploadsClient {
+    async fn map_preview(&self, request: UploadRequest) -> String {
+        if request.kind != UploadKind::Map {
+            return String::new();
+        }
+        // Off the runtime: opening a file, reading a quarter of a megabyte and
+        // building a PNG out of it is not work for an async worker.
+        tokio::task::spawn_blocking(move || read_map_preview(&request).unwrap_or_default())
+            .await
+            .unwrap_or_default()
+    }
+
     async fn publish(&self, request: UploadRequest) -> mpsc::Receiver<UploadStatus> {
         let (tx, rx) = mpsc::channel(16);
         let config = self.config.clone();
@@ -111,14 +122,43 @@ async fn run(
     let token = tokens.get().ok_or_else(|| "not logged in".to_string())?;
 
     let source = source_folder(request)?;
-    let _ = tx.send(UploadStatus::Compressing).await;
-    let archive = zip_folder(&source, request.kind, rename(request)).await?;
+    let archive = zip_folder(&source, request.kind, rename(request), tx).await?;
 
     // Always remove the temporary archive, however this ends: both reference
     // clients delete it in a `finally`.
     let result = send(config, http, &token, request, &archive, tx).await;
     let _ = tokio::fs::remove_file(&archive).await;
     result
+}
+
+/// The `.scmap` inside the folder being published, read into a data URL.
+///
+/// The folder goes through the same `source_folder` the publish does, so a name
+/// that could not be published cannot be read from either. Exactly one `.scmap`
+/// is expected at the top level, which is what a map folder is; anything else
+/// yields no picture rather than a guess at which file was meant.
+fn read_map_preview(request: &UploadRequest) -> Result<String, String> {
+    let folder = source_folder(request)?;
+    let mut found: Option<PathBuf> = None;
+    for entry in std::fs::read_dir(&folder)
+        .map_err(|error| format!("could not read the map folder: {error}"))?
+        .flatten()
+    {
+        let path = entry.path();
+        let is_scmap = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("scmap"));
+        if !is_scmap {
+            continue;
+        }
+        if found.is_some() {
+            return Err("the folder holds more than one map file".to_string());
+        }
+        found = Some(path);
+    }
+    let scmap = found.ok_or_else(|| "the folder holds no map file".to_string())?;
+    crate::infra::scmap::preview_data_url(&scmap)
 }
 
 /// Resolve, and validate, the folder being published.
@@ -285,10 +325,38 @@ struct Rename {
     uid: String,
 }
 
+/// The folder's total size in bytes, for the compression bar to divide by.
+///
+/// Best effort: an entry that cannot be read contributes nothing rather than
+/// failing the walk, since `write_archive` is about to visit the same tree and
+/// is the right place to report a real problem. A folder that measures zero
+/// simply leaves the bar indeterminate.
+fn folder_bytes(source: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![source.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(entry.path());
+            } else if file_type.is_file() {
+                total += entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+            }
+        }
+    }
+    total
+}
+
 async fn zip_folder(
     source: &Path,
     kind: UploadKind,
     rename: Option<Rename>,
+    tx: &mpsc::Sender<UploadStatus>,
 ) -> Result<PathBuf, String> {
     let source = source.to_path_buf();
     let target = cache_dir()?.join(format!(
@@ -301,10 +369,36 @@ async fn zip_folder(
         .map_err(|error| format!("could not create the cache directory: {error}"))?;
 
     let output = target.clone();
-    // `zip` is synchronous and this walks a whole directory.
-    tokio::task::spawn_blocking(move || write_archive(&source, &output, rename.as_ref()))
-        .await
-        .map_err(|error| format!("compression task failed: {error}"))??;
+    let measured = {
+        let source = source.clone();
+        tokio::task::spawn_blocking(move || folder_bytes(&source))
+            .await
+            .unwrap_or(0)
+    };
+    let total_bytes = clamp_bytes(measured);
+    let _ = tx
+        .send(UploadStatus::Compressing {
+            done_bytes: 0,
+            total_bytes,
+        })
+        .await;
+
+    // `zip` is synchronous and this walks a whole directory, so progress comes
+    // back over the same channel from the blocking thread.
+    let progress = tx.clone();
+    tokio::task::spawn_blocking(move || {
+        write_archive(&source, &output, rename.as_ref(), &|done| {
+            // `try_send` rather than `blocking_send`: a full channel means the
+            // UI is already a few frames behind, and dropping an intermediate
+            // percentage is better than stalling the compression to deliver it.
+            let _ = progress.try_send(UploadStatus::Compressing {
+                done_bytes: clamp_bytes(done),
+                total_bytes,
+            });
+        })
+    })
+    .await
+    .map_err(|error| format!("compression task failed: {error}"))??;
 
     let size = tokio::fs::metadata(&target)
         .await
@@ -321,8 +415,21 @@ async fn zip_folder(
     Ok(target)
 }
 
-fn write_archive(source: &Path, target: &Path, rename: Option<&Rename>) -> Result<(), String> {
+/// Byte counts cross the IPC boundary as `u32`, and the archive limit is far
+/// below that ceiling; saturating is still better than wrapping a folder that
+/// somehow measures more.
+fn clamp_bytes(value: u64) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+fn write_archive(
+    source: &Path,
+    target: &Path,
+    rename: Option<&Rename>,
+    on_progress: &dyn Fn(u64),
+) -> Result<(), String> {
     let mut renamed = false;
+    let mut packed = 0u64;
     let root_name = source
         .file_name()
         .and_then(|name| name.to_str())
@@ -384,6 +491,8 @@ fn write_archive(source: &Path, target: &Path, rename: Option<&Rename>) -> Resul
                 writer
                     .write_all(&bytes)
                     .map_err(|error| format!("could not write {name}: {error}"))?;
+                packed += bytes.len() as u64;
+                on_progress(packed);
                 wrote_anything = true;
             } else {
                 return Err(format!(
@@ -703,10 +812,25 @@ pub struct FakeUploads;
 
 #[async_trait]
 impl UploadsPort for FakeUploads {
+    async fn map_preview(&self, _request: UploadRequest) -> String {
+        String::new()
+    }
+
     async fn publish(&self, request: UploadRequest) -> mpsc::Receiver<UploadStatus> {
         let (tx, rx) = mpsc::channel(8);
         tokio::spawn(async move {
-            let _ = tx.send(UploadStatus::Compressing).await;
+            let _ = tx
+                .send(UploadStatus::Compressing {
+                    done_bytes: 0,
+                    total_bytes: 1024,
+                })
+                .await;
+            let _ = tx
+                .send(UploadStatus::Compressing {
+                    done_bytes: 1024,
+                    total_bytes: 1024,
+                })
+                .await;
             let _ = tx
                 .send(UploadStatus::Uploading {
                     sent_bytes: 0,
@@ -759,6 +883,7 @@ mod tests {
                 name: "New".into(),
                 uid: "2222".into(),
             }),
+            &|_| {},
         )
         .expect("the archive should be written");
 
@@ -798,6 +923,7 @@ mod tests {
                 name: "New".into(),
                 uid: "2222".into(),
             }),
+            &|_| {},
         );
         assert!(result.is_err(), "{result:?}");
         assert!(result.unwrap_err().contains("cannot be renamed"));
@@ -873,7 +999,7 @@ mod tests {
         std::fs::write(source.join("sub").join("script.lua"), b"-- x").unwrap();
 
         let archive = root.join("out.zip");
-        write_archive(&source, &archive, None).expect("the archive should be written");
+        write_archive(&source, &archive, None, &|_| {}).expect("the archive should be written");
 
         let file = std::fs::File::open(&archive).unwrap();
         let mut zip = zip::ZipArchive::new(file).unwrap();
@@ -899,7 +1025,7 @@ mod tests {
         let source = root.join("nothing.v0001");
         std::fs::create_dir_all(&source).unwrap();
 
-        let result = write_archive(&source, &root.join("out.zip"), None);
+        let result = write_archive(&source, &root.join("out.zip"), None, &|_| {});
         assert!(result.is_err(), "{result:?}");
         assert!(result.unwrap_err().contains("empty"));
 
@@ -918,7 +1044,7 @@ mod tests {
         std::fs::write(&private, b"must not be published").unwrap();
         symlink(&private, source.join("innocent.txt")).unwrap();
 
-        let result = write_archive(&source, &root.join("out.zip"), None);
+        let result = write_archive(&source, &root.join("out.zip"), None, &|_| {});
         assert!(result.is_err(), "a symlink must never be followed");
         assert!(result.unwrap_err().contains("symbolic links"));
 
@@ -990,7 +1116,10 @@ mod tests {
         while let Some(status) = rx.recv().await {
             seen.push(status);
         }
-        assert_eq!(seen.first(), Some(&UploadStatus::Compressing));
+        assert!(
+            matches!(seen.first(), Some(UploadStatus::Compressing { .. })),
+            "{seen:?}"
+        );
         assert!(seen.contains(&UploadStatus::Finishing), "mods only");
         assert_eq!(seen.last(), Some(&UploadStatus::Succeeded));
     }

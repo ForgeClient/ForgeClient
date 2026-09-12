@@ -38,7 +38,19 @@ const send = (id: number, password: string | null, replaceMods: boolean) =>
 export function joinGame(id: number, password: string | null = null) {
   lastRequest = { id, password };
   const state = useAppStore.getState().state;
-  if (state.settings.game.confirmDownloadsBeforeJoining ?? true) {
+  // Only when the client knows what is on disk.
+  //
+  // `installed` is empty both when nothing is installed and when nothing has
+  // looked yet, and only the Mods tab and the host dialog used to look. So a
+  // player who restarted the client and went straight to the Play tab was
+  // asked to download mods they already had -- which is worse than not asking
+  // at all, since it invites them to re-download a mod on the strength of a
+  // list the client never read. Ask for the list instead, and let this join
+  // through: nothing is downloaded twice either way, the backend checks the
+  // folder before it fetches anything.
+  const known = state.mods.installedStatus.type === "ready";
+  if (!known) ipc.send({ kind: "Mods", command: { type: "loadInstalled" } });
+  if (known && (state.settings.game.confirmDownloadsBeforeJoining ?? true)) {
     const game = state.lobby.games.find((candidate) => candidate.id === id);
     const missing = game ? missingSimMods(game, state.mods.installed) : [];
     if (game && missing.length > 0) {

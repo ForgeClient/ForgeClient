@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { PlayerProfile } from "../ipc/bindings";
-import { averageRating, displayedRating, gameLeaderboard } from "./playerRatings";
+import type { Game, PlayerProfile } from "../ipc/bindings";
+import {
+  averageRating,
+  displayedRating,
+  gameLeaderboard,
+  ratingGateBlocks,
+} from "./playerRatings";
 
 const rating = (leaderboard: string, value: number) => ({
   leaderboard,
@@ -96,5 +101,34 @@ describe("averaging a lineup", () => {
   it("has no average when nobody is rated", () => {
     expect(averageRating([null, null])).toBeNull();
     expect(averageRating([])).toBeNull();
+  });
+});
+
+describe("the host's enforced rating range", () => {
+  const game = (over: Partial<Game>) => ({
+    ratingMin: null,
+    ratingMax: null,
+    enforceRatingRange: false,
+    ...over,
+  }) as Game;
+
+  it("keeps nobody out until the host enforces it", () => {
+    // The report: an enforced range "merely added a badge". Unenforced, that
+    // is exactly what it is, and the tag now says so.
+    const advisory = game({ ratingMin: 1000, ratingMax: 1500 });
+    expect(ratingGateBlocks(advisory, 200)).toBe(false);
+  });
+
+  it("shuts out a rating past either bound, inclusive at both", () => {
+    const gated = game({ ratingMin: 1000, ratingMax: 1500, enforceRatingRange: true });
+    expect(ratingGateBlocks(gated, 999)).toBe(true);
+    expect(ratingGateBlocks(gated, 1501)).toBe(true);
+    expect(ratingGateBlocks(gated, 1000)).toBe(false);
+    expect(ratingGateBlocks(gated, 1500)).toBe(false);
+  });
+
+  it("never blocks on a rating it does not know", () => {
+    const gated = game({ ratingMin: 1000, ratingMax: 1500, enforceRatingRange: true });
+    expect(ratingGateBlocks(gated, null)).toBe(false);
   });
 });

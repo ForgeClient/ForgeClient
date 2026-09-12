@@ -1,4 +1,4 @@
-import type { LobbyEvent, LobbyState, MatchmakerQueue } from "../../ipc/bindings";
+import type { Game, LobbyEvent, LobbyState, MatchmakerQueue } from "../../ipc/bindings";
 
 /**
  * Twin of `faf_domain::state::lobby::merge_matchmaker_queues`.
@@ -28,6 +28,32 @@ export function mergeMatchmakerQueues(
   );
 }
 
+/**
+ * Fold a set of changes into a games list, returning a new array.
+ *
+ * The twin of `apply_game_changes` in `faf-domain`, and it has to agree with it
+ * exactly: the conformance fixture replays the same events through both and
+ * compares the results. The list stays sorted by id, and a removal naming an id
+ * the list never held is ignored rather than treated as an error, because the
+ * server announces a lobby closing whether or not this client saw it open.
+ *
+ * Games that did not change keep their object identity, so a card whose lobby
+ * nobody touched does not re-render.
+ */
+export function applyGameChanges(list: Game[], upserted: Game[], removed: number[]): Game[] {
+  if (upserted.length === 0 && removed.length === 0) return list;
+  const next = removed.length > 0
+    ? list.filter((game) => !removed.includes(game.id))
+    : list.slice();
+  for (const game of upserted) {
+    const at = next.findIndex((existing) => existing.id === game.id);
+    if (at >= 0) next[at] = game;
+    else next.push(game);
+  }
+  next.sort((left, right) => left.id - right.id);
+  return next;
+}
+
 export function reduceLobby(state: LobbyState, event: LobbyEvent): LobbyState {
   switch (event.type) {
     case "connecting":
@@ -49,6 +75,13 @@ export function reduceLobby(state: LobbyState, event: LobbyEvent): LobbyState {
       return { ...state, games: event.payload.games };
     case "liveGamesUpdated":
       return { ...state, liveGames: event.payload.games };
+    // The hot path. The server announces one lobby at a time, and answering
+    // each with the whole list meant replacing the array end to end and
+    // re-rendering every card. See the Rust twin in `state/lobby.rs`.
+    case "gamesChanged":
+      return { ...state, games: applyGameChanges(state.games, event.payload.upserted, event.payload.removed) };
+    case "liveGamesChanged":
+      return { ...state, liveGames: applyGameChanges(state.liveGames, event.payload.upserted, event.payload.removed) };
     case "matchmakerQueuesUpdated":
       return { ...state, matchmakerQueues: mergeMatchmakerQueues(state.matchmakerQueues, event.payload.queues) };
     case "matchmakingUpdated":

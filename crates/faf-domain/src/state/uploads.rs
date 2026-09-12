@@ -83,7 +83,16 @@ pub struct UploadRequest {
 pub enum UploadStatus {
     #[default]
     Idle,
-    Compressing,
+    /// Bytes packed so far, and the folder's total size.
+    ///
+    /// Measured rather than counted, because "Compressing…" on its own is the
+    /// one stage that can sit still for a minute on a large map and give no
+    /// sign of which minute it is in.
+    #[serde(rename_all = "camelCase")]
+    Compressing {
+        done_bytes: u32,
+        total_bytes: u32,
+    },
     /// Bytes sent so far, and the archive's total size.
     Uploading {
         sent_bytes: u32,
@@ -103,17 +112,21 @@ impl UploadStatus {
     pub fn is_busy(&self) -> bool {
         matches!(
             self,
-            Self::Compressing | Self::Uploading { .. } | Self::Finishing
+            Self::Compressing { .. } | Self::Uploading { .. } | Self::Finishing
         )
     }
 
     /// Progress as a percentage, when it is meaningful.
     pub fn percent(&self) -> Option<u32> {
         match self {
-            Self::Uploading {
-                sent_bytes,
-                total_bytes,
-            } if *total_bytes > 0 => Some((*sent_bytes as u64 * 100 / *total_bytes as u64) as u32),
+            Self::Compressing {
+                done_bytes: done,
+                total_bytes: total,
+            }
+            | Self::Uploading {
+                sent_bytes: done,
+                total_bytes: total,
+            } if *total > 0 => Some((*done as u64 * 100 / *total as u64).min(100) as u32),
             _ => None,
         }
     }
@@ -145,6 +158,12 @@ pub struct UploadsState {
     /// The publish dialog's subject, or `None` when it is closed.
     pub request: Option<UploadRequest>,
     pub status: UploadStatus,
+    /// The map's own preview, read out of its `.scmap`, as a data URL.
+    ///
+    /// Empty for a mod, for a map whose file cannot be read, and until the read
+    /// finishes. The vault cannot supply this one: a map that is being uploaded
+    /// for the first time has no vault entry to have a thumbnail on.
+    pub preview: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -160,6 +179,13 @@ pub enum UploadsEvent {
     },
     Progressed {
         status: UploadStatus,
+    },
+    /// The preview read out of the map being published, or an empty string
+    /// when there was none to read. Not an error worth showing: a dialog
+    /// without a picture is still a working dialog.
+    #[serde(rename_all = "camelCase")]
+    PreviewRead {
+        data_url: String,
     },
 }
 
@@ -181,9 +207,11 @@ pub enum UploadsCommand {
 pub fn reduce(state: &mut UploadsState, event: &UploadsEvent) {
     match event {
         UploadsEvent::Opened { request } => {
+            // A fresh subject, so the previous map's picture goes with it.
             *state = UploadsState {
                 request: Some(request.clone()),
                 status: UploadStatus::Idle,
+                preview: String::new(),
             }
         }
         UploadsEvent::Closed => {
@@ -202,6 +230,7 @@ pub fn reduce(state: &mut UploadsState, event: &UploadsEvent) {
             }
         }
         UploadsEvent::Progressed { status } => state.status = status.clone(),
+        UploadsEvent::PreviewRead { data_url } => state.preview = data_url.clone(),
     }
 }
 
@@ -278,9 +307,27 @@ mod tests {
     }
 
     #[test]
-    fn progress_is_a_percentage_only_while_uploading() {
+    fn progress_is_a_percentage_only_while_bytes_are_moving() {
         assert_eq!(UploadStatus::Idle.percent(), None);
-        assert_eq!(UploadStatus::Compressing.percent(), None);
+        // Compression reports a measured share too: it is the stage that can
+        // sit still for a minute on a large map.
+        assert_eq!(
+            UploadStatus::Compressing {
+                done_bytes: 30,
+                total_bytes: 120
+            }
+            .percent(),
+            Some(25)
+        );
+        assert_eq!(
+            UploadStatus::Compressing {
+                done_bytes: 1,
+                total_bytes: 0
+            }
+            .percent(),
+            None,
+            "an unmeasurable folder leaves the bar indeterminate"
+        );
         assert_eq!(
             UploadStatus::Uploading {
                 sent_bytes: 50,
@@ -314,7 +361,11 @@ mod tests {
     #[test]
     fn only_the_in_flight_stages_count_as_busy() {
         assert!(!UploadStatus::Idle.is_busy());
-        assert!(UploadStatus::Compressing.is_busy());
+        assert!(UploadStatus::Compressing {
+            done_bytes: 0,
+            total_bytes: 1
+        }
+        .is_busy());
         assert!(UploadStatus::Uploading {
             sent_bytes: 1,
             total_bytes: 2
@@ -332,6 +383,7 @@ mod tests {
             status: UploadStatus::Failed {
                 reason: "last time".into(),
             },
+            preview: String::new(),
         };
         reduce(&mut state, &UploadsEvent::Opened { request: request() });
         assert_eq!(state.status, UploadStatus::Idle);
@@ -363,6 +415,7 @@ mod tests {
                 sent_bytes: 10,
                 total_bytes: 100,
             },
+            preview: String::new(),
         };
         reduce(&mut state, &UploadsEvent::Closed);
         assert_eq!(state.request, None);
@@ -374,6 +427,7 @@ mod tests {
         let mut state = UploadsState {
             request: Some(request()),
             status: UploadStatus::Succeeded,
+            preview: String::new(),
         };
         reduce(&mut state, &UploadsEvent::Closed);
         assert_eq!(state, UploadsState::default());

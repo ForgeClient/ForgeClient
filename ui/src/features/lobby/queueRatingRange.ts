@@ -54,3 +54,44 @@ export function playersInRatingRange(
   const inRange = windows.filter((window) => window.min < mean && mean < window.max).length;
   return Math.max(0, inRange - ownSearches);
 }
+
+/**
+ * How wide a rating band each row of the queue breakdown covers.
+ *
+ * 400 is what the Java client uses, and the bands it produces -- 400 to 800,
+ * 800 to 1200 -- are the ones players already talk in.
+ */
+export const RATING_BUCKET = 400;
+
+/** One band of the breakdown: how many people are queued around that rating. */
+export interface RatingBucket {
+  min: number;
+  max: number;
+  count: number;
+}
+
+/**
+ * The people waiting in a queue, grouped by roughly what they are rated.
+ *
+ * The server publishes no ratings, only each search's acceptable *window*, so
+ * the rating is taken as the middle of that window. That is exact at the
+ * moment a search starts and drifts outwards as the window widens with time
+ * spent waiting, which is the right direction to be wrong in: it spreads a
+ * long-waiting player across neighbouring bands rather than inventing one.
+ *
+ * The narrow windows are preferred for that reason. Empty bands are left out
+ * entirely, so the breakdown is as long as the queue is varied.
+ */
+export function queueRatingBuckets(queue: MatchmakerQueue): RatingBucket[] {
+  const windows = queue.boundary80s.length > 0 ? queue.boundary80s : queue.boundary75s;
+  const counts = new Map<number, number>();
+  for (const window of windows) {
+    const middle = (window.min + window.max) / 2;
+    if (!Number.isFinite(middle)) continue;
+    const band = Math.floor(Math.max(0, middle) / RATING_BUCKET) * RATING_BUCKET;
+    counts.set(band, (counts.get(band) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([min, count]) => ({ min, max: min + RATING_BUCKET, count }));
+}

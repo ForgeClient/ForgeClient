@@ -2,7 +2,7 @@
 // the map catalogue and installation state; this component only derives the
 // current search, filters, sorting and selection for presentation.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../../design-system/Button";
 import { Icon } from "../../design-system/Icon";
 import { EmptyState } from "../../design-system/EmptyState";
@@ -17,7 +17,6 @@ import {
 // Only the from-disk entry point: publishing an installed map moved into its own
 // modal on this branch, so `openUpload` is no longer called from here.
 import { openUploadFromDisk } from "../uploads/UploadDialog";
-import { useUploadIntro } from "../uploads/UploadIntroDialog";
 import { Pagination } from "../../design-system/Pagination";
 import type { InstalledMap, MapVaultQuery, VaultMap } from "../../ipc/bindings";
 import { ipc } from "../../ipc/client";
@@ -38,6 +37,7 @@ import {
 } from "./MapVaultComponents";
 import { MapPreviewDialog } from "./MapPreviewZoom";
 import { GenerateMapModal, GeneratorProgress, stillRunning } from "./GenerateMapModal";
+import { DEFAULT_VAULT_PAGE_SIZE } from "../../shared/browsingPreferences";
 import "./maps.css";
 import type { MessageKey } from "../../i18n";
 import { useTranslation } from "../../i18n/useTranslation";
@@ -48,8 +48,21 @@ type RankedFilter = "all" | "ranked" | "unranked";
 type InstallFilter = "all" | "installed" | "available";
 type VaultPreset = "recommended" | "favorites" | "mine" | "rating" | "newest" | "played" | "all";
 
-const PAGE_SIZE = 36;
 const MAP_SIZES = [64, 128, 256, 512, 1024, 2048, 4096];
+
+const VAULT_SORTS: readonly VaultSort[] = ["rating", "newest", "played", "name", "size"];
+
+/** The sort a preset brings with it when nothing else has been chosen. */
+function presetSort(preset: VaultPreset): VaultSort {
+  if (preset === "newest" || preset === "mine") return "newest";
+  if (preset === "played") return "played";
+  if (preset === "all") return "name";
+  return "rating";
+}
+
+function storedVaultSort(value: string): VaultSort | null {
+  return (VAULT_SORTS as readonly string[]).includes(value) ? (value as VaultSort) : null;
+}
 
 const loadVault = () => ipc.send({ kind: "Maps", command: { type: "loadVault" } });
 const loadInstalled = () => ipc.send({ kind: "Maps", command: { type: "loadInstalled" } });
@@ -102,6 +115,7 @@ function mapVaultQuery(
   preset: VaultPreset,
   page: number,
   playerId: number | null,
+  pageSize: number,
 ): MapVaultQuery {
   const sortBy: MapVaultQuery["sortBy"] = applied.sort === "size" ? "size"
     : applied.sort === "name" ? "name"
@@ -133,7 +147,7 @@ function mapVaultQuery(
     // Name ascending, everything else best/newest/most first.
     sortDescending: sortBy !== "name",
     page,
-    pageSize: PAGE_SIZE,
+    pageSize: pageSize,
   };
 }
 
@@ -141,7 +155,6 @@ function VaultView({ busy }: { busy: boolean }) {
   // The Upload button opens this first. Pressing it used to put an OS
   // file browser on screen immediately, which for anyone streaming is
   // their filesystem in front of an audience.
-  const uploadIntro = useUploadIntro("map", () => void openUploadFromDisk("map"));
   const { t } = useTranslation();
   // `vault` is the catalogue index, still loaded once and still what the
   // favourites preset and every map-art lookup read. `browse` is one page of a
@@ -164,12 +177,12 @@ function VaultView({ busy }: { busy: boolean }) {
   const playerId = useAppStore((state) => state.state.auth.player?.id ?? null);
   const storedPreset = (browsing.mapVaultPreset as VaultPreset) || "recommended";
   const preset: VaultPreset = storedPreset === "mine" && playerId === null ? "recommended" : storedPreset;
-  const initialSort: VaultSort = (() => {
-    if (preset === "newest" || preset === "mine") return "newest";
-    if (preset === "played") return "played";
-    if (preset === "all") return "name";
-    return "rating";
-  })();
+  // A sort the user chose outlives the tab they chose it on. Without this,
+  // picking "Most recent", leaving for the lobby and coming back put the list
+  // back in the preset's own order, which reads as the client forgetting.
+  const initialSort: VaultSort =
+    storedVaultSort(browsing.mapVaultSort) ?? presetSort(preset);
+  const pageSize = browsing.vaultPageSize || DEFAULT_VAULT_PAGE_SIZE;
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<VaultSort>(initialSort);
   const [ranked, setRanked] = useState<RankedFilter>("all");
@@ -232,23 +245,20 @@ function VaultView({ busy }: { busy: boolean }) {
     if (maps.installedStatus.type === "idle") loadInstalled();
   }, []);
 
+  // Only on a *change* of preset, never on mount. Running this on mount is
+  // what overwrote the remembered sort with the preset's own the moment the
+  // tab came back.
+  //
+  // "My maps" has no natural ranking of its own (Java's own-maps query sends
+  // no sort at all), and newest-first is what an author wants: the upload they
+  // just made is the one they came to look at.
+  const lastPreset = useRef(preset);
   useEffect(() => {
-    // "My maps" has no natural ranking of its own (Java's own-maps query sends
-    // no sort at all), and newest-first is what an author wants: the upload
-    // they just made is the one they came to look at.
-    if (preset === "newest" || preset === "mine") {
-      setSort("newest");
-      setApplied((prev) => ({ ...prev, sort: "newest" }));
-    } else if (preset === "played") {
-      setSort("played");
-      setApplied((prev) => ({ ...prev, sort: "played" }));
-    } else if (preset === "all") {
-      setSort("name");
-      setApplied((prev) => ({ ...prev, sort: "name" }));
-    } else if (preset === "rating" || preset === "recommended" || preset === "favorites") {
-      setSort("rating");
-      setApplied((prev) => ({ ...prev, sort: "rating" }));
-    }
+    if (lastPreset.current === preset) return;
+    lastPreset.current = preset;
+    const next = presetSort(preset);
+    setSort(next);
+    setApplied((prev) => ({ ...prev, sort: next }));
   }, [preset]);
 
   const applySearch = () => {
@@ -281,6 +291,15 @@ function VaultView({ busy }: { busy: boolean }) {
     setSort(nextSort);
     setApplied((prev) => ({ ...prev, sort: nextSort }));
     setPage(1);
+    if (browsing.mapVaultSort !== nextSort) {
+      ipc.send({
+        kind: "Settings",
+        command: {
+          type: "setBrowsing",
+          payload: { preferences: { ...browsing, mapVaultSort: nextSort } },
+        },
+      });
+    }
   };
 
   const choosePreset = (next: VaultPreset) => {
@@ -292,10 +311,15 @@ function VaultView({ busy }: { busy: boolean }) {
     setSort(nextSort);
     setApplied((prev) => ({ ...prev, sort: nextSort }));
     setPage(1);
-    if (browsing.mapVaultPreset !== next) {
+    if (browsing.mapVaultPreset !== next || browsing.mapVaultSort !== "") {
       ipc.send({
         kind: "Settings",
-        command: { type: "setBrowsing", payload: { preferences: { ...browsing, mapVaultPreset: next } } },
+        command: {
+          type: "setBrowsing",
+          // The preset brings its own order, so choosing one clears the
+          // remembered sort rather than fighting it on the next load.
+          payload: { preferences: { ...browsing, mapVaultPreset: next, mapVaultSort: "" } },
+        },
       });
     }
   };
@@ -335,8 +359,8 @@ function VaultView({ busy }: { busy: boolean }) {
   // The search runs on the server, as it does in both reference clients. What
   // the user typed goes out as a query; the results come back as one page.
   const query = useMemo(
-    () => mapVaultQuery(applied, preset, page, playerId),
-    [applied, preset, page, playerId],
+    () => mapVaultQuery(applied, preset, page, playerId, pageSize),
+    [applied, preset, page, playerId, pageSize],
   );
 
   // `favorites` is the one preset the API cannot answer: it is local state the
@@ -372,11 +396,11 @@ function VaultView({ busy }: { busy: boolean }) {
   // results are still on their way, the count in state still describes the old
   // one, and a pager built from it offers pages this search does not have.
   const totalPages = localFavorites
-    ? Math.max(1, Math.ceil(favorites.length / PAGE_SIZE))
+    ? Math.max(1, Math.ceil(favorites.length / pageSize))
     : (sameVaultSearch(browseQuery, query) ? browseTotalPages ?? 1 : 1);
   const currentPage = Math.min(page, totalPages);
   const pageMaps = localFavorites
-    ? results.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+    ? results.slice((currentPage - 1) * pageSize, currentPage * pageSize)
     : results;
   const selected = pageMaps.find((map) => map.folderName === selectedFolder) ?? pageMaps[0] ?? null;
   const hiddenFilterCount = Number(installFilter !== "all")
@@ -386,8 +410,7 @@ function VaultView({ busy }: { busy: boolean }) {
 
   return (
     <>
-      {uploadIntro.dialog}
-      <SearchPanel
+            <SearchPanel
         className="map-search-panel"
         onSubmit={(event) => {
           event.preventDefault();
@@ -422,7 +445,7 @@ function VaultView({ busy }: { busy: boolean }) {
             >
               <Icon name="refresh" size={15} /> {t("maps.view.refresh")}
             </Button>
-            <Button onClick={uploadIntro.start}><Icon name="plus" size={15} /> {t("maps.view.uploadFromDisk")}</Button>
+            <Button onClick={void openUploadFromDisk("map")}><Icon name="plus" size={15} /> {t("maps.view.uploadFromDisk")}</Button>
                       </>
         )}
         advanced={filtersOpen ? (
@@ -623,6 +646,7 @@ function InstalledView({ busy }: { busy: boolean }) {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [pendingUninstall, setPendingUninstall] = useState<InstalledMap | null>(null);
+  const pageSize = browsing.vaultPageSize || DEFAULT_VAULT_PAGE_SIZE;
 
   const note = loadStatusNote(installedStatus, t("maps.view.scanning"), t("maps.view.scanFailed"));
   const vaultByFolder = useMemo(() => new Map(vault.map((map) => [map.folderName.toLocaleLowerCase(), map])), [vault]);
@@ -734,9 +758,9 @@ function InstalledView({ busy }: { busy: boolean }) {
     minimumPlayers, maximumPlayers, width, height, vaultByFolder, favoriteFolders,
   ]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
-  const pageMaps = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const pageMaps = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <>
@@ -756,7 +780,11 @@ function InstalledView({ busy }: { busy: boolean }) {
                 key={key}
                 className={preset === key ? "active" : ""}
                 onClick={() => choosePreset(key)}
-                title={key === "favorites" ? `Show ${favoriteFolders.size} favorited maps` : undefined}
+                title={
+                  key === "favorites"
+                    ? t("maps.view.showFavorites", { count: favoriteFolders.size })
+                    : undefined
+                }
               >
                 {key === "favorites" && <Icon name="star" size={14} fill="currentColor" />} {label}
               </Button>
@@ -878,12 +906,13 @@ function InstalledView({ busy }: { busy: boolean }) {
                   >
                     <MapPreview map={metadata ?? map} />
                   </button>
+                  {/* The name gets the whole line back. The ranked chip is
+                      the same six letters on every row and was taking width
+                      from titles that needed it, so it moves to the corner,
+                      where the installed mods list already keeps its state. */}
                   <span>
                     <span className="installed-map-title-row">
                       <strong title={metadata?.displayName || map.displayName}>{metadata?.displayName || map.displayName}</strong>
-                      <span className={isRanked ? "map-vault-type ranked" : "map-vault-type unranked"}>
-                        {t(isRanked ? "maps.vault.ranked" : "maps.vault.unranked")}
-                      </span>
                     </span>
                     <small>{map.folderName}</small>
                     <small>
@@ -893,14 +922,25 @@ function InstalledView({ busy }: { busy: boolean }) {
                       {metadata && metadata.reviews > 0 && ` · ${ratingLabel(metadata)}`}
                     </small>
                   </span>
-                  <span className="installed-map-actions">
-                    <Button
-                      className="map-vault-uninstall"
-                      disabled={isBusy}
-                      onClick={() => setPendingUninstall(map)}
-                    >
-                      {t(isBusy ? "maps.view.removing" : "maps.view.uninstall")}
-                    </Button>
+                  <span className="installed-map-side">
+                    <span className={isRanked ? "map-vault-type ranked" : "map-vault-type unranked"}>
+                      {t(isRanked ? "maps.vault.ranked" : "maps.vault.unranked")}
+                    </span>
+                    <span className="installed-map-actions">
+                      {/* An icon rather than the word. "Uninstall" in red was
+                          the loudest thing on a row whose subject is the map,
+                          and it is the one action here that cannot be undone
+                          without a download. */}
+                      <Button
+                        className="map-vault-uninstall is-icon"
+                        disabled={isBusy}
+                        aria-label={t("maps.view.uninstallNamed", { name: metadata?.displayName || map.displayName })}
+                        title={t(isBusy ? "maps.view.removing" : "maps.view.uninstall")}
+                        onClick={() => setPendingUninstall(map)}
+                      >
+                        <Icon name="trash" size={14} />
+                      </Button>
+                    </span>
                   </span>
                 </article>
               );

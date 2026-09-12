@@ -110,7 +110,9 @@ export function ChatNameColorSettings({
                 type="button"
                 className="chat-color-clear surface surface-interactive"
                 disabled={!color}
-                aria-label={`Clear the name color for ${text.toLocaleLowerCase()}`}
+                aria-label={t("settings.nameColors.clearCategoryAria", {
+                  label: text.toLocaleLowerCase(),
+                })}
                 title={t("settings.nameColors.useDefaultText")}
                 onClick={() => setCategoryColor(key, "")}
               >
@@ -164,12 +166,15 @@ export function ChatNameColorSettings({
           {assignedPlayers.map(([nickname, color]) => (
             <div className="chat-player-color surface" key={nickname}>
               <span>{nickname}</span>
-              <label className="chat-color-swatch-wrap" title={`Change color for ${nickname}`}>
+              <label
+                className="chat-color-swatch-wrap"
+                title={t("settings.nameColors.changePlayer", { name: nickname })}
+              >
                 <span className="chat-color-preview-swatch" style={{ backgroundColor: color }} />
                 <input
                   type="color"
                   value={color}
-                  aria-label={`Change the name color for ${nickname}`}
+                  aria-label={t("settings.nameColors.changePlayerAria", { name: nickname })}
                   onChange={(event) => saveColors({
                     ...preferences.nameColors,
                     players: { ...preferences.nameColors.players, [nickname]: event.target.value },
@@ -179,8 +184,8 @@ export function ChatNameColorSettings({
               <button
                 type="button"
                 className="chat-color-clear surface surface-interactive"
-                aria-label={`Remove the name color for ${nickname}`}
-                title={`Remove ${nickname}'s custom color`}
+                aria-label={t("settings.nameColors.removePlayerAria", { name: nickname })}
+                title={t("settings.nameColors.removePlayer", { name: nickname })}
                 onClick={() => removePlayer(nickname)}
               >
                 <Icon name="close" size={12} />

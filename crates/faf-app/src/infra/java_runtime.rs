@@ -4,7 +4,7 @@
 //! Looking up `java` independently made the adapter reuse the official FAF
 //! client's runtime while map generation still found an obsolete system Java.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Resolve an explicit override, a bundled runtime, or a reference client's
 /// runtime before falling back to `PATH`.
@@ -18,23 +18,15 @@ pub(crate) fn preferred_java_path() -> String {
         }
     }
 
-    let executable = std::env::current_exe().ok();
-    let working_directory = std::env::current_dir().ok();
-    let mut roots = executable
-        .as_deref()
-        .and_then(Path::parent)
-        .into_iter()
-        .flat_map(|directory| directory.ancestors().take(4))
-        .map(Path::to_path_buf)
-        .collect::<Vec<_>>();
-    roots.extend(
-        working_directory
-            .as_deref()
-            .into_iter()
-            .flat_map(|directory| directory.ancestors().take(3))
-            .map(Path::to_path_buf),
-    );
+    // Beside the client first, and nowhere the working directory can reach:
+    // see `infra::helper_search_roots`. A `java.exe` in a folder the client
+    // happened to be started from is not the one to run.
+    let mut roots = crate::infra::helper_search_roots();
 
+    // The named install locations below are the documented places a JRE lives,
+    // and all of them are directories an ordinary user cannot write to (or, in
+    // JAVA_HOME's case, one the user set themselves). They come after the
+    // bundled candidates so a shipped runtime always wins.
     if cfg!(windows) {
         for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
             if let Some(directory) = std::env::var_os(variable) {

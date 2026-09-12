@@ -283,7 +283,7 @@ export function RatingHistoryChart({ points, maximum, showMaximum }: RatingHisto
               x={peakAtEnd ? maximumPoint.x - 9 : maximumPoint.x + 9}
               y={maximumPoint.y - 8}
             >
-              Peak {maximumPoint.rating.toFixed(0)}
+              {t("playerCard.chart.peak", { rating: maximumPoint.rating.toFixed(0) })}
             </text>
           </g>
         )}

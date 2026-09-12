@@ -4,6 +4,9 @@ description = "Pure domain layer: state, events, commands, reducer. No IO, no as
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Never goes to crates.io: the workspace crates reach each other by path, and
+# cargo-deny only tolerates a path dependency in a crate that says so.
+publish = false
 
 [dependencies]
 serde = { workspace = true }

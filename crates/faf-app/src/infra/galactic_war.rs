@@ -79,7 +79,11 @@ impl GalacticWarConfig {
     pub fn faf() -> Result<Self, String> {
         Ok(Self {
             api_base: env_or("FAF_GW_API_BASE", "https://galactic-war-test.spidarna.com"),
-            download_base: env_or("FAF_GW_DOWNLOAD_BASE", "https://downloads.faforever.com"),
+            // The archive this names is unpacked and executed.
+            download_base: crate::infra::dev_env_or(
+                "FAF_GW_DOWNLOAD_BASE",
+                "https://downloads.faforever.com",
+            ),
             install_dir: data_dir()?.join("galactic-war"),
         })
     }
@@ -305,14 +309,24 @@ impl GalacticWarGateway {
 
         let _ = progress.send(InstallProgress::Extracting).await;
         let target = self.version_dir(&version);
-        // A rerun after an interrupted install would otherwise refuse forever.
-        let _ = std::fs::remove_dir_all(&target);
-        vault_install::install_flat_archive(
-            &archive,
-            &target,
-            "the Galactic War archive",
-            finish_install,
-        )?;
+        // Off the async runtime. Removing a directory tree and unpacking an
+        // archive of up to 256 MiB are seconds of synchronous filesystem work,
+        // and doing them on a Tokio worker parks that worker: the lobby's
+        // frames queue up behind an install the user is watching a progress
+        // bar for.
+        tokio::task::spawn_blocking(move || {
+            // A rerun after an interrupted install would otherwise refuse
+            // forever.
+            let _ = std::fs::remove_dir_all(&target);
+            vault_install::install_flat_archive(
+                &archive,
+                &target,
+                "the Galactic War archive",
+                finish_install,
+            )
+        })
+        .await
+        .map_err(|error| format!("the Galactic War install task failed: {error}"))??;
 
         self.write_manifest(&version)?;
         self.remove_other_versions(&version);

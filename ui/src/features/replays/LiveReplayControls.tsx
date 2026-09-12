@@ -1,6 +1,6 @@
 import { Button } from "../../design-system/Button";
 import { Icon } from "../../design-system/Icon";
-import { prettyGameType, type LiveFilters } from "./liveReplayModel";
+import { prettyFeaturedMod, prettyGameType, type LiveFilters } from "./liveReplayModel";
 import { useTranslation } from "../../i18n/useTranslation";
 
 interface Props {
@@ -61,7 +61,9 @@ export function LiveReplayControls(props: Props) {
           onClick={props.onToggleFilters}
         >
           <Icon name="filter" size={15} />
-          Filters{props.activeFilterCount > 0 ? ` (${props.activeFilterCount})` : ""}
+          {props.activeFilterCount > 0
+            ? t("replays.live.filtersCount", { count: props.activeFilterCount })
+            : t("replays.live.filters")}
         </Button>
         {props.activeFilterCount > 0 && <Button onClick={props.onClear}>{t("replays.live.clear")}</Button>}
         <span className="live-replay-stream-status">
@@ -82,7 +84,7 @@ export function LiveReplayControls(props: Props) {
             <span>{t("replays.live.featuredMod")}</span>
             <select value={filters.featuredMod} onChange={(event) => onFilter("featuredMod", event.target.value)}>
               <option value="">{t("replays.live.anyMod")}</option>
-              {props.featuredMods.map((mod) => <option key={mod} value={mod}>{mod}</option>)}
+              {props.featuredMods.map((mod) => <option key={mod} value={mod}>{prettyFeaturedMod(mod)}</option>)}
             </select>
           </label>
           <label>
@@ -96,7 +98,9 @@ export function LiveReplayControls(props: Props) {
             <span>{t("replays.live.gameSize")}</span>
             <select value={filters.maxPlayers} onChange={(event) => onFilter("maxPlayers", event.target.value)}>
               <option value="">{t("replays.live.anySize")}</option>
-              {props.maxPlayerOptions.map((count) => <option key={count} value={count}>{count} slots</option>)}
+              {props.maxPlayerOptions.map((count) => (
+                <option key={count} value={count}>{t("replays.live.slots", { count })}</option>
+              ))}
             </select>
           </label>
         </div>

@@ -90,8 +90,8 @@ function InstalledModCard({
             <strong>{mod.displayName}</strong>
           </span>
           <small>
-            {mod.modType === "ui" ? "UI mod" : "Simulation mod"} · v{mod.version}
-            {mod.author ? ` · ${mod.author}` : ""}
+            {t(mod.modType === "ui" ? "mods.vault.uiMod" : "mods.vault.simMod")} · v{mod.version}
+            {mod.author ? ` \u00b7 ${mod.author}` : ""}
           </small>
           <small title={mod.uid}>{mod.uid}</small>
         </span>
@@ -245,6 +245,7 @@ export function InstalledModsView({
   const installed = useAppStore((state) => state.state.mods.installed);
   const installedStatus = useAppStore((state) => state.state.mods.installedStatus);
   const vault = useAppStore((state) => state.state.mods.vault);
+  const vaultStatus = useAppStore((state) => state.state.mods.vaultStatus);
   const installStatus = useAppStore((state) => state.state.mods.installStatus);
   const toggleStatus = useAppStore((state) => state.state.mods.toggleStatus);
 
@@ -261,6 +262,11 @@ export function InstalledModsView({
   const [page, setPage] = useState(1);
   const [pendingUninstall, setPendingUninstall] = useState<InstalledMod | null>(null);
   const [openFolder, setOpenFolder] = useState<string | null>(null);
+  // The answer to "how do I know if a mod needs updating", which was the part
+  // of the report nothing on this screen answered: the badges only appear once
+  // the catalogue happens to have been reloaded, and nothing asks it to.
+  const [checking, setChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState("");
 
   const note = loadStatusNote(installedStatus, t("mods.installed.scanning"), t("mods.installed.scanFailed"));
   const vaultByUid = useMemo(() => new Map(vault.map((mod) => [mod.uid, mod])), [vault]);
@@ -270,6 +276,36 @@ export function InstalledModsView({
     if (mods.installedStatus.type === "idle") loadInstalled();
     if (mods.vaultStatus.type === "idle") loadVault();
   }, []);
+
+  // The catalogue reload finished: say what it found, and take the reader to
+  // the mods it found it for. Silence would leave the button looking broken in
+  // the common case, which is that everything is already current.
+  useEffect(() => {
+    if (!checking || vaultStatus.type === "loading") return;
+    setChecking(false);
+    if (vaultStatus.type === "failed") {
+      setCheckResult(t("mods.installed.checkFailed"));
+      return;
+    }
+    const count = updatableFolders.size;
+    setCheckResult(
+      count > 0
+        ? t("mods.installed.checkFound", { count })
+        : t("mods.installed.checkNone"),
+    );
+    if (count > 0) choosePreset("updates");
+    // `updatableFolders` is recomputed from the reloaded catalogue, and it is
+    // the value this effect exists to read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checking, vaultStatus]);
+
+  // The result is a note, not a state: it says what one press found and then
+  // gets out of the way.
+  useEffect(() => {
+    if (!checkResult) return;
+    const timer = window.setTimeout(() => setCheckResult(""), 6_000);
+    return () => window.clearTimeout(timer);
+  }, [checkResult]);
 
   const choosePreset = (next: InstalledModPreset) => {
     setPreset(next);
@@ -440,6 +476,22 @@ export function InstalledModsView({
             <Button onClick={loadInstalled} disabled={installedStatus.type === "loading"}>
               <Icon name="refresh" size={15} /> {t("mods.installed.rescan")}
             </Button>
+            <Button
+              disabled={checking || vaultStatus.type === "loading"}
+              onClick={() => {
+                setCheckResult("");
+                setChecking(true);
+                loadVault();
+              }}
+            >
+              <Icon name="download" size={15} />{" "}
+              {t(checking ? "mods.installed.checking" : "mods.installed.checkUpdates")}
+            </Button>
+            {checkResult && (
+              <span className="installed-mod-check-result muted" role="status">
+                {checkResult}
+              </span>
+            )}
           </>
         )}
       >

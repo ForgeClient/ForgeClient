@@ -1,9 +1,170 @@
+/* Wide enough for a map preview beside its facts, which is what the screen is
+   for: an author checking that the version, the size and the player count are
+   the ones they meant before the vault has them. */
+/* Wider and less tightly packed than it was. Every line in here is something
+   somebody is reading before making their work public: the folder they picked,
+   what it will be called, whether games on it count, and the rules they are
+   agreeing to. A 620px column with 6px between the rows read as a form to get
+   through rather than as four decisions. */
 .upload-dialog {
-  width: min(460px, 92vw);
+  width: min(680px, 94vw);
+  padding: var(--space-4);
+}
+
+.upload-dialog > * + * {
+  margin-top: var(--space-3);
+}
+
+.upload-dialog-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.upload-dialog-header h2 {
+  margin: 0;
+}
+
+.upload-badge {
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.upload-badge.is-update {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
+.upload-badge.is-new {
+  color: var(--color-ok);
+  border-color: color-mix(in srgb, var(--color-ok) 45%, transparent);
+  background: color-mix(in srgb, var(--color-ok) 14%, transparent);
+}
+
+.upload-lede {
+  margin-bottom: var(--space-3);
+}
+
+.upload-subject {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.upload-preview {
+  flex: 0 0 auto;
+  width: 160px;
+  height: 160px;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.upload-preview.is-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-subtle);
+  background: var(--color-surface-raised);
+}
+
+.upload-facts {
+  flex: 1 1 240px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px var(--space-3);
+  margin: 0;
+  min-width: 0;
+}
+
+.upload-facts > div {
+  display: contents;
+}
+
+.upload-facts dt {
+  color: var(--color-subtle);
+  font-size: 12px;
+}
+
+.upload-facts dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.upload-description {
+  margin: var(--space-3) 0 0;
+  max-height: 6.5em;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.upload-rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.upload-rules-accept {
+  align-items: flex-start;
+  gap: var(--space-2);
+  line-height: 1.45;
+}
+
+/* The rules themselves, inside the sentence that accepts them. Underlined
+   because it is a link in running text, where colour alone is not enough to
+   say so. */
+.upload-rules-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0;
+  color: var(--color-accent);
+  background: none;
+  border: none;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.upload-rules-link:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* The bar the compression stage never had. Zipping a large map is the one
+   step that can sit still for a minute with nothing to show for it. */
+.upload-progress {
+  height: 6px;
+  margin-top: var(--space-3);
+  overflow: hidden;
+  background: var(--color-surface-raised);
+  border-radius: var(--radius-pill);
+}
+
+.upload-progress i {
+  display: block;
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 120ms linear;
 }
 
 .upload-dialog h2 {
-  margin: 0 0 var(--space-2);
+  margin: 0;
   font-size: 18px;
   letter-spacing: -0.02em;
 }

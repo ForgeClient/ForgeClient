@@ -371,6 +371,7 @@ async fn install_featured_mod(
         for (done, file) in outdated.iter().enumerate() {
             update_file(
                 http,
+                api_base,
                 cache_dir,
                 target_dir,
                 file,
@@ -793,6 +794,51 @@ async fn file_matches_checksum(target_dir: &Path, file: &FeaturedModFile) -> boo
     format!("{:x}", md5::compute(&bytes)).eq_ignore_ascii_case(&file.md5)
 }
 
+/// Whether a download URL the API handed us may be requested, and handed the
+/// HMAC token that authorises it.
+///
+/// The file list arrives from the API with a `cacheable_url` per file, and it
+/// was fetched as given: the only integrity anchor was the MD5 in the same
+/// document, and MD5 collides. A compromised or mis-served API could point the
+/// download anywhere and be sent the token with it.
+///
+/// The rule is the one `vault_install::validate_url` uses, loosened only where
+/// FAF really does spread files across hosts: same site as the API base, which
+/// covers `content.faforever.com` and any `*.faforever.com` cache, and nothing
+/// else. A host with no dot in it (a local test server) has to match exactly.
+fn is_allowed_download_host(raw: &str, api_base: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw) else {
+        return false;
+    };
+    let Ok(base) = url::Url::parse(api_base) else {
+        return false;
+    };
+    // Never plaintext unless the configured base itself is, which is only ever
+    // a deliberate local setup.
+    if url.scheme() != "https" && url.scheme() != base.scheme() {
+        return false;
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    let (Some(host), Some(base_host)) = (url.host_str(), base.host_str()) else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case(base_host) {
+        return true;
+    }
+    // The API base's registrable site: the last two labels of its host.
+    let mut labels = base_host.rsplitn(3, '.');
+    let (Some(tld), Some(domain)) = (labels.next(), labels.next()) else {
+        return false;
+    };
+    let site = format!("{domain}.{tld}");
+    host.eq_ignore_ascii_case(&site)
+        || host
+            .to_ascii_lowercase()
+            .ends_with(&format!(".{}", site.to_ascii_lowercase()))
+}
+
 /// Bring one outdated file up to date: serve from the content-addressed cache
 /// or download fresh (populating the cache either way, for reuse across
 /// versions/replays that share a file).
@@ -803,6 +849,7 @@ async fn file_matches_checksum(target_dir: &Path, file: &FeaturedModFile) -> boo
 #[allow(clippy::too_many_arguments)]
 async fn update_file(
     http: &reqwest::Client,
+    api_base: &str,
     cache_dir: &Path,
     target_dir: &Path,
     file: &FeaturedModFile,
@@ -813,6 +860,12 @@ async fn update_file(
     progress: &(dyn Fn(PreparationStep) + Sync),
 ) -> Result<(), String> {
     let target_path = safe_join_file(target_dir, &file.group, &file.name)?;
+    if !is_allowed_download_host(&file.cacheable_url, api_base) {
+        return Err(format!(
+            "the API pointed {} at a download outside FAF",
+            file.name
+        ));
+    }
     if file.md5.len() != 32 || !file.md5.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(format!(
             "the API returned an invalid checksum for {}",
@@ -1975,6 +2028,47 @@ pub async fn inspect_game_cache(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_download_url_has_to_stay_on_faf() {
+        use super::is_allowed_download_host as allowed;
+        let base = "https://api.faforever.com";
+
+        // The hosts FAF really serves files from.
+        assert!(allowed(
+            "https://content.faforever.com/faf/updaterNew/x.nx2",
+            base
+        ));
+        assert!(allowed("https://api.faforever.com/x", base));
+        assert!(allowed("https://faforever.com/x", base));
+
+        // The URL arrives in the same document as the MD5 that is supposed to
+        // vouch for it, and it is sent the HMAC token that authorises the
+        // download, so neither is evidence about the other.
+        assert!(!allowed("https://faforever.com.evil.example/x", base));
+        assert!(!allowed("https://evil.example/faforever.com/x", base));
+        assert!(
+            !allowed("http://content.faforever.com/x", base),
+            "no plaintext"
+        );
+        assert!(
+            !allowed("https://user:pw@content.faforever.com/x", base),
+            "no credentials in the URL"
+        );
+        assert!(!allowed("file:///C:/Windows/System32/cmd.exe", base));
+        assert!(!allowed("not a url", base));
+    }
+
+    #[test]
+    fn a_local_test_api_still_works() {
+        use super::is_allowed_download_host as allowed;
+        // A deliberate local setup has no registrable domain to match on, so
+        // the host has to be the same one, and its scheme is allowed to be the
+        // base's own.
+        let base = "http://localhost:8080";
+        assert!(allowed("http://localhost:8080/files/x", base));
+        assert!(!allowed("http://elsewhere:8080/files/x", base));
+    }
+
     use super::*;
     use serde_json::json;
     use std::io::Read as _;

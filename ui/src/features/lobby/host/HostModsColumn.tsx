@@ -1,5 +1,10 @@
-// The mods column, identical in both host dialogs: saved presets, a search, the
-// UI/Sim split, and bulk actions scoped to whichever kind is on screen.
+// The mods column, identical in both host dialogs: the UI/Sim split, a search,
+// saved presets, and bulk actions scoped to whichever kind is on screen.
+//
+// Laid out to match the map column beside it, which was the request: the kind
+// switcher sits where the All/Favourites tabs sit, the search under it, and
+// the presets button where the map filter is. The two columns had the same
+// parts in a different order, which reads as two designs rather than one.
 //
 // Self-contained on purpose: it reads the installed mods and the presets from
 // the store and writes both back itself, so a dialog embedding it passes
@@ -158,6 +163,29 @@ export function HostModsColumn() {
         </div>
       </div>
 
+      {/* The same switch the map column uses, rather than a second one that
+          looks nearly like it. Two controls doing the same job in one dialog
+          should not be distinguishable by their styling. */}
+      <div className="host-mod-tabs section-tabs" role="tablist" aria-label={t("lobby.host.mods")}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={modTab === "ui"}
+          className={modTab === "ui" ? "active" : ""}
+          onClick={() => setModTab("ui")}
+        >
+          {t("lobby.host.uiMods")} ({uiMods.length})
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={modTab === "sim"}
+          className={modTab === "sim" ? "active" : ""}
+          onClick={() => setModTab("sim")}
+        >
+          {t("lobby.host.simMods")} ({simMods.length})
+        </button>
+      </div>
       <div className="host-map-search-row">
         <div className="search-field host-column-search host-map-search-field">
           <Icon name="search" size={13} />
@@ -214,7 +242,9 @@ export function HostModsColumn() {
                         }}
                       >
                         <span className="host-preset-popover-name">{preset.name}</span>
-                        <span className="host-preset-popover-count">{preset.uids.length} mods</span>
+                        <span className="host-preset-popover-count">
+                          {t("lobby.host.presetModCount", { count: preset.uids.length })}
+                        </span>
                       </button>
                       <button
                         type="button"
@@ -233,22 +263,6 @@ export function HostModsColumn() {
         </div>
       </div>
 
-      <div className="host-mod-tabs">
-        <button
-          type="button"
-          className={`host-mod-tab${modTab === "ui" ? " active" : ""}`}
-          onClick={() => setModTab("ui")}
-        >
-          {t("lobby.host.uiMods")} ({uiMods.length})
-        </button>
-        <button
-          type="button"
-          className={`host-mod-tab${modTab === "sim" ? " active" : ""}`}
-          onClick={() => setModTab("sim")}
-        >
-          {t("lobby.host.simMods")} ({simMods.length})
-        </button>
-      </div>
 
       <div className="host-column-body host-mod-list">
         {filteredMods.length === 0 ? (
@@ -275,8 +289,15 @@ export function HostModsColumn() {
                 {mod.displayName}
               </span>
               {/* The tab already says which kind these are, so the trailing
-                  slot carries the version instead of a redundant badge. */}
-              <span className="host-mod-version">{mod.version}</span>
+                  slot carries the version instead of a redundant badge. The
+                  `v` is not decoration: a bare "21" beside a mod name reads as
+                  a count of something, and nobody could tell what. */}
+              <span
+                className="host-mod-version"
+                title={t("lobby.host.modVersion", { version: mod.version })}
+              >
+                v{mod.version}
+              </span>
             </label>
           ))
         )}

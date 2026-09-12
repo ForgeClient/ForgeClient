@@ -62,6 +62,7 @@ pub mod replay;
 pub(crate) mod replay_recorder;
 pub mod reporting;
 pub mod reviews;
+pub mod scmap;
 pub mod session;
 pub mod settings_fake;
 pub mod settings_file;
@@ -164,10 +165,29 @@ pub(crate) fn hide_console(command: &mut tokio::process::Command) {
 /// `tcp_server()` helper; the brief gap before the subprocess binds is the same
 /// small race it accepts.
 pub(crate) fn free_port() -> Option<u16> {
-    std::net::TcpListener::bind(("127.0.0.1", 0))
-        .ok()
-        .and_then(|l| l.local_addr().ok())
-        .map(|addr| addr.port())
+    free_ports(1).map(|ports| ports[0])
+}
+
+/// Reserve several free loopback ports at once, all different from each other.
+///
+/// Calling [`free_port`] twice does not guarantee two ports: each listener is
+/// dropped before the next bind, so the operating system is free to hand back
+/// the one it just released, and an adapter told to use the same number for
+/// its RPC and its GPGNet socket fails in a way whose log says nothing useful.
+/// Holding every listener until all of them are chosen is what makes them
+/// distinct.
+///
+/// The gap between choosing and the subprocess binding is still there and is
+/// still the race the reference client accepts.
+pub(crate) fn free_ports(count: usize) -> Option<Vec<u16>> {
+    let mut listeners = Vec::with_capacity(count);
+    for _ in 0..count {
+        listeners.push(std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?);
+    }
+    listeners
+        .iter()
+        .map(|listener| listener.local_addr().ok().map(|addr| addr.port()))
+        .collect()
 }
 
 /// On-disk identity. One definition, because these were duplicated across six
@@ -258,6 +278,67 @@ pub(crate) fn env_or(key: &str, fallback: impl Into<String>) -> String {
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| fallback.into())
+}
+
+/// [`env_or`] for a variable that decides where executable content comes from.
+///
+/// Ignored outside a development build. The update download prefix, the
+/// Galactic War download base and the map generator's release URLs all name a
+/// server whose bytes end up running on the machine, and in a release binary
+/// the only answer to "where does the client fetch its own installer from" is
+/// the one compiled into it. Redirecting that is a debugging tool, not a
+/// supported deployment, and leaving it readable from the environment turns
+/// every one of those downloads into "whatever the environment says".
+///
+/// The rest of the `FAF_*` overrides stay: an API base or a log directory
+/// changes what the client reads, not what it executes.
+pub(crate) fn dev_env_or(key: &str, fallback: impl Into<String>) -> String {
+    if cfg!(debug_assertions) {
+        env_or(key, fallback)
+    } else {
+        if std::env::var_os(key).is_some() {
+            tracing::warn!(
+                variable = key,
+                "ignoring a download override in a release build"
+            );
+        }
+        fallback.into()
+    }
+}
+
+/// The directories a bundled helper binary may be searched for in.
+///
+/// The executable's own directory, and in a development build the few
+/// ancestors above it that hold the workspace's `natives/`. Nothing else.
+///
+/// The working directory used to lead the list, and the walk used to run every
+/// ancestor to the drive root. Between them that meant a client started from a
+/// downloaded folder, or with a shortcut carrying a "start in" of somebody
+/// else's choosing, looked for `faf-uid.exe` and `java.exe` in that folder and
+/// in every folder above it, `C:\` included. On a shared or terminal-server
+/// machine a writable `C:\natives\faf-uid.exe` is then found and run, and the
+/// processes this affects are exactly the ones handed the session id and the
+/// player's traffic.
+///
+/// A packaged build gets its helpers from Tauri resources through
+/// `FAF_UID_PATH` and friends, so this is the fallback, not the path normally
+/// taken. The development case is the only one that needs to look upward at
+/// all, and it is the only one that still does.
+pub(crate) fn helper_search_roots() -> Vec<std::path::PathBuf> {
+    let Ok(executable) = std::env::current_exe() else {
+        return Vec::new();
+    };
+    let Some(directory) = executable.parent() else {
+        return Vec::new();
+    };
+    // Four levels covers `target/debug/faf.exe` reaching the workspace root,
+    // which is where `natives/` is prepared.
+    let depth = if cfg!(debug_assertions) { 4 } else { 1 };
+    directory
+        .ancestors()
+        .take(depth)
+        .map(std::path::Path::to_path_buf)
+        .collect()
 }
 
 /// A folder (or file) the client writes to and the user may want to open.

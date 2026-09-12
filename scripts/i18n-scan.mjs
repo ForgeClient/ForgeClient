@@ -6,11 +6,17 @@
 //
 // It is a heuristic, deliberately biased towards over-reporting. A false
 // positive costs one glance; a missed string ships an untranslatable client.
-// Two hiding places matter most and are both covered here, because an earlier
+// Four hiding places matter most and are all covered here, because an earlier
 // version that only looked at JSX text nodes under-reported by roughly half:
 //
 //   {copied ? "Link copied" : "Copy live link"}     ternaries
 //   case "VICTORY": return "Victory";               switch returns
+//   `${count} players`                              template literals
+//   Filters{count > 0 ? ` (${count})` : ""}         text beside an expression
+//
+// The last two were found by hand rather than by this script, which is what
+// added them: a dozen strings were sitting in template literals and in JSX
+// text that happened to touch a brace, and the report said three.
 //
 // Usage:
 //   node scripts/i18n-scan.mjs                 whole ui/src, counts per file
@@ -60,6 +66,12 @@ const KEYBOARD_KEYS = new Set([
   // The bare prefix, for the `startsWith("Arrow")` that handles all four.
   "Arrow",
 ]);
+
+// Template literals that build a CSS value rather than a sentence. A style
+// string is the one kind of template whose fixed half reads like prose to the
+// rule above, because it is words separated by spaces.
+const CSS_VALUE =
+  /\b(?:px|fr|vh|vw|rem|em|deg|repeat|minmax|translate[XY]?|rotate|scale|calc|url|color-mix|srgb|linear-gradient|no-repeat|solid|contain|cover|center)\b|%[,)]|^\d/;
 
 // TypeScript builtins that appear as bare words in type positions.
 const TYPE_NAMES = new Set([
@@ -129,6 +141,29 @@ for (const path of (await sourceFiles(resolve(root, target))).sort()) {
   // JSX text nodes are not string literals, so they need their own pass.
   for (const [, value] of source.matchAll(/>\s*([A-Z][A-Za-z0-9 ,.'\u2019!?()/&%:-]{2,})\s*</g)) {
     if (isProse(value)) hits.add(value);
+  }
+  // JSX text that touches an expression container on either side. Without
+  // this, `Filters{count > 0 ? ... : ""}` and `{count} slots` both read as
+  // fragments of an expression rather than as the copy they are.
+  //
+  // Both sides must touch real markup, and the text may hold no bracket,
+  // colon or equals sign: that is what keeps ordinary TypeScript between two
+  // braces from being read as a sentence.
+  const JSX_WORDS = "[A-Za-z0-9 ,.'’!?/&%-]";
+  const JSX_BESIDE_EXPRESSION = [
+    new RegExp(`>\\s*([A-Z]${JSX_WORDS}{2,}?)\\s*\\{`, "g"),
+    new RegExp(`\\}\\s*([A-Za-z]${JSX_WORDS}{2,}?)\\s*<`, "g"),
+  ];
+  for (const pattern of JSX_BESIDE_EXPRESSION) {
+    for (const [, value] of source.matchAll(pattern)) if (isProse(value)) hits.add(value.trim());
+  }
+  // Template literals whose fixed halves are prose. A class name is the
+  // common false positive and is excluded by `isProse`, which refuses a
+  // lower-case identifier list; what is left is copy with a number in it.
+  for (const [, value] of source.matchAll(/`([^`\\\n]{3,})`/g)) {
+    const fixed = value.replace(/\$\{[^}]*\}/g, " ").trim();
+    if (CSS_VALUE.test(fixed)) continue;
+    if (fixed.split(/\s+/).filter(Boolean).length >= 2 && isProse(fixed)) hits.add(`\`${value}\``);
   }
 
   if (hits.size === 0) continue;

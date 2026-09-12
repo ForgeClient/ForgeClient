@@ -48,6 +48,7 @@ function game(id: number): Game {
     hostedAt: null,
     ratingMin: null,
     ratingMax: null,
+    enforceRatingRange: false,
     teams: {},
     simMods: {},
   };
@@ -200,5 +201,59 @@ describe("snapshots", () => {
     );
     expect(next.games.map((g) => g.id)).toEqual([3]);
     expect(next.liveGames.map((g) => g.id)).toEqual([4]);
+  });
+});
+
+// The delta path, which is what the lobby actually uses: the server announces
+// one game at a time, and these have to fold into the same list the snapshot
+// path would have produced. The Rust twin is
+// `faf_domain::state::lobby::apply_game_changes`, and its tests are the same
+// three cases.
+describe("games changed", () => {
+  it("inserts, updates and removes without disturbing the rest", () => {
+    const before = state({ games: [game(1), game(3)] });
+    const renamed = { ...game(3), title: "renamed" };
+    const after = reduceLobby(before, {
+      type: "gamesChanged",
+      payload: { upserted: [game(2), renamed], removed: [1] },
+    });
+
+    expect(after.games.map((g) => g.id)).toEqual([2, 3]);
+    expect(after.games[1].title).toBe("renamed");
+  });
+
+  it("ignores a removal for a game it never held", () => {
+    const before = state({ games: [game(1)] });
+    const after = reduceLobby(before, {
+      type: "gamesChanged",
+      payload: { upserted: [], removed: [99] },
+    });
+
+    expect(after.games).toHaveLength(1);
+  });
+
+  // The point of the whole change: a card whose lobby nobody touched keeps its
+  // object identity, so React does not re-render it.
+  it("keeps untouched games referentially identical", () => {
+    const untouched = game(1);
+    const before = state({ games: [untouched, game(2)] });
+    const after = reduceLobby(before, {
+      type: "gamesChanged",
+      payload: { upserted: [{ ...game(2), players: 4 }], removed: [] },
+    });
+
+    expect(after.games[0]).toBe(untouched);
+    expect(after.games[1].players).toBe(4);
+  });
+
+  it("leaves the open list alone when only the live list changes", () => {
+    const before = state({ games: [game(1)] });
+    const after = reduceLobby(before, {
+      type: "liveGamesChanged",
+      payload: { upserted: [game(7)], removed: [] },
+    });
+
+    expect(after.games).toHaveLength(1);
+    expect(after.liveGames.map((g) => g.id)).toEqual([7]);
   });
 });

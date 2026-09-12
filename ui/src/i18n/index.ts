@@ -79,6 +79,19 @@ export function formatNumber(value: number, locale: Locale = getLocale()): strin
   return new Intl.NumberFormat(intlTag(locale)).format(value);
 }
 
+/**
+ * A number with exactly one decimal place, in the reader's own notation.
+ *
+ * Review scores are the reason this exists: "4.7" is a typo in German, where
+ * the decimal separator is a comma and a full stop groups thousands.
+ */
+export function formatDecimal(value: number, locale: Locale = getLocale()): string {
+  return new Intl.NumberFormat(intlTag(locale), {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
 export { DEFAULT_LOCALE, intlTag, isLocale, LOCALE_KEYS, LOCALES } from "./locales";
 export type { Locale, LocaleDefinition } from "./locales";
 export type { MessageKey } from "./catalog/en";

@@ -213,6 +213,7 @@ mod tests {
             hosted_at: None,
             rating_min: None,
             rating_max: None,
+            enforce_rating_range: false,
             teams,
             sim_mods: BTreeMap::new(),
         }

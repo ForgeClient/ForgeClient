@@ -224,8 +224,8 @@ export const UserList = memo(function UserList({
           <input
             type="search"
             value={filter}
-            placeholder={`${users.length} ${users.length === 1 ? "user" : "users"} · type to filter…`}
-            aria-label={`Filter users (${users.length} ${users.length === 1 ? "user" : "users"})`}
+            placeholder={t("chat.roster.filterPlaceholder", { count: users.length })}
+            aria-label={t("chat.roster.filterAria", { count: users.length })}
             onChange={(e) => {
               setFilter(e.target.value);
               setScrollTop(0);

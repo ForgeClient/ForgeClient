@@ -865,3 +865,10 @@
 .mod-rename-field > span {
   color: var(--color-muted);
 }
+
+/* The answer to one press of Check for updates. A note beside the button
+   rather than a toast: it belongs to the button, and it is gone in a moment. */
+.installed-mod-check-result {
+  align-self: center;
+  font-size: 12px;
+}

@@ -579,3 +579,18 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* A column divider on the right edge of each header cell. Wider than it looks
+   and taller than the cell, so the grab area is findable without a hairline
+   target -- the same shape the game browser and the replay list use. */
+.live-replay-table th {
+  position: relative;
+}
+
+.live-replay-col-handle {
+  position: absolute;
+  top: 0;
+  right: -6px;
+  bottom: 0;
+  width: 11px;
+}

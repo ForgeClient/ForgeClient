@@ -8,6 +8,11 @@
 // It expands in place rather than opening a panel over the client. The list is
 // short and it belongs to the sidebar it sits in, and an inline disclosure has
 // no anchoring to get wrong when the sidebar is resized or the window is short.
+//
+// Upward, though. This sits in the bottom-anchored group, so a list rendered
+// under the button pushed the button up and out from under the cursor: opening
+// it to check something and then closing it again meant chasing it. Above, the
+// group grows into the space over it and the button does not move.
 // Individual pinning was the original request and was dropped on the thread:
 // once the list is one click away there is nothing left to save by choosing
 // which half of it to keep.
@@ -33,18 +38,6 @@ export function GameFoldersMenu() {
 
   return (
     <div className="game-folders">
-      <button
-        type="button"
-        className={open ? "tab game-folders-toggle is-open" : "tab game-folders-toggle"}
-        aria-expanded={open}
-        title={t("gameFolders.title")}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <Icon name="folder" size={17} />
-        <span>{t("gameFolders.title")}</span>
-        <Icon className="game-folders-caret" name={open ? "chevronUp" : "chevronDown"} size={14} />
-      </button>
-
       {open && (
         <div className="game-folders-list" role="group" aria-label={t("gameFolders.title")}>
           {FOLDER_GROUPS.map((group) => (
@@ -65,6 +58,19 @@ export function GameFoldersMenu() {
           {error && <p className="game-folders-error" role="alert">{error}</p>}
         </div>
       )}
+
+      <button
+        type="button"
+        className={open ? "tab game-folders-toggle is-open" : "tab game-folders-toggle"}
+        aria-expanded={open}
+        title={t("gameFolders.title")}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Icon name="folder" size={17} />
+        <span>{t("gameFolders.title")}</span>
+        {/* Points the way the list will move: up to open, down to put away. */}
+        <Icon className="game-folders-caret" name={open ? "chevronDown" : "chevronUp"} size={14} />
+      </button>
     </div>
   );
 }

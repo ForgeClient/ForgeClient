@@ -622,7 +622,8 @@
       "request": null,
       "status": {
         "type": "idle"
-      }
+      },
+      "preview": ""
     },
     "galacticWar": {
       "status": {
@@ -764,7 +765,8 @@
         "cacheSizeAlertGb": 10,
         "cacheRollingBranches": false,
         "pipeLiveReplay": false,
-        "keepGeneratedMaps": false
+        "keepGeneratedMaps": false,
+        "keepGeneratedMapsLimit": 0
       },
       "discord": {
         "enabled": true,
@@ -793,7 +795,9 @@
           "hideModded": false,
           "hideUnranked": false,
           "applyFilters": false,
-          "rules": []
+          "rules": [],
+          "columnWidths": [],
+          "detailWidth": 0
         },
         "matchmakerUnselectedQueues": [],
         "matchmakerFactions": [
@@ -838,6 +842,12 @@
         "favoriteMods": [],
         "mapVaultPreset": "recommended",
         "modVaultPreset": "recommended",
+        "mapVaultSort": "",
+        "modVaultSort": "",
+        "vaultPageSize": 0,
+        "replayListColumns": [],
+        "liveReplayColumns": [],
+        "coopBoardColumns": [],
         "modPresets": [],
         "leaderboardRatingColumns": [
           "rating",
@@ -1183,6 +1193,7 @@
                   "wins": 2,
                   "losses": 1,
                   "undecided": 0,
+                  "unranked": 0,
                   "unattributed": 0,
                   "maps": [
                     {
@@ -1191,6 +1202,7 @@
                       "games": 3,
                       "wins": 2,
                       "losses": 1,
+                      "draws": 0,
                       "lastPlayed": "2026-01-04T20:00:00Z"
                     }
                   ],
@@ -1211,6 +1223,7 @@
               "losses": 1,
               "maps": [
                 {
+                  "draws": 0,
                   "games": 3,
                   "generated": false,
                   "lastPlayed": "2026-01-04T20:00:00Z",
@@ -1223,6 +1236,7 @@
               "truncated": false,
               "unattributed": 0,
               "undecided": 0,
+              "unranked": 0,
               "wins": 2
             },
             "mapStatsError": "",
@@ -1979,8 +1993,11 @@
               "uiScale": 100
             },
             "browsing": {
+              "coopBoardColumns": [],
               "customGamesBrowser": {
                 "applyFilters": false,
+                "columnWidths": [],
+                "detailWidth": 0,
                 "hideModded": false,
                 "hidePrivate": false,
                 "hideUnranked": false,
@@ -2020,6 +2037,7 @@
                 "updated"
               ],
               "legacyStorageMigrated": false,
+              "liveReplayColumns": [],
               "liveReplayFilters": {
                 "activePlayers": "",
                 "featuredMod": "",
@@ -2031,6 +2049,7 @@
                 "search": ""
               },
               "mapVaultPreset": "recommended",
+              "mapVaultSort": "",
               "matchmakerFactions": [
                 "UEF",
                 "Aeon",
@@ -2040,8 +2059,11 @@
               "matchmakerUnselectedQueues": [],
               "modPresets": [],
               "modVaultPreset": "recommended",
+              "modVaultSort": "",
+              "replayListColumns": [],
               "replayVaultPlayer": "",
-              "replaysView": "tiles"
+              "replaysView": "tiles",
+              "vaultPageSize": 0
             },
             "cacheInfo": {
               "totalFiles": 0,
@@ -2109,6 +2131,7 @@
               "cacheSizeAlertGb": 10,
               "confirmDownloadsBeforeJoining": true,
               "keepGeneratedMaps": false,
+              "keepGeneratedMapsLimit": 0,
               "launchWrapper": "",
               "pipeLiveReplay": false
             },
@@ -6257,6 +6280,32 @@
             }
           },
           "expected": {
+            "preview": "",
+            "request": {
+              "displayName": "My Map",
+              "folderName": "my_map.v0001",
+              "kind": "map",
+              "ranked": false,
+              "renameTo": "",
+              "sourcePath": null
+            },
+            "status": {
+              "type": "idle"
+            }
+          }
+        },
+        {
+          "event": {
+            "kind": "Uploads",
+            "event": {
+              "type": "previewRead",
+              "payload": {
+                "dataUrl": "data:image/png;base64,iVBORw0KGgo="
+              }
+            }
+          },
+          "expected": {
+            "preview": "data:image/png;base64,iVBORw0KGgo=",
             "request": {
               "displayName": "My Map",
               "folderName": "my_map.v0001",
@@ -6281,6 +6330,7 @@
             }
           },
           "expected": {
+            "preview": "data:image/png;base64,iVBORw0KGgo=",
             "request": {
               "displayName": "My Map",
               "folderName": "my_map.v0001",
@@ -6301,12 +6351,17 @@
               "type": "progressed",
               "payload": {
                 "status": {
-                  "type": "compressing"
+                  "type": "compressing",
+                  "payload": {
+                    "doneBytes": 3,
+                    "totalBytes": 10
+                  }
                 }
               }
             }
           },
           "expected": {
+            "preview": "data:image/png;base64,iVBORw0KGgo=",
             "request": {
               "displayName": "My Map",
               "folderName": "my_map.v0001",
@@ -6316,6 +6371,10 @@
               "sourcePath": null
             },
             "status": {
+              "payload": {
+                "doneBytes": 3,
+                "totalBytes": 10
+              },
               "type": "compressing"
             }
           }
@@ -6328,8 +6387,13 @@
             }
           },
           "expected": {
+            "preview": "data:image/png;base64,iVBORw0KGgo=",
             "request": null,
             "status": {
+              "payload": {
+                "doneBytes": 3,
+                "totalBytes": 10
+              },
               "type": "compressing"
             }
           }
@@ -6347,6 +6411,7 @@
             }
           },
           "expected": {
+            "preview": "data:image/png;base64,iVBORw0KGgo=",
             "request": null,
             "status": {
               "type": "succeeded"
@@ -6361,6 +6426,7 @@
             }
           },
           "expected": {
+            "preview": "",
             "request": null,
             "status": {
               "type": "idle"
@@ -28966,8 +29032,11 @@
               "uiScale": 100
             },
             "browsing": {
+              "coopBoardColumns": [],
               "customGamesBrowser": {
                 "applyFilters": false,
+                "columnWidths": [],
+                "detailWidth": 0,
                 "hideModded": false,
                 "hidePrivate": false,
                 "hideUnranked": false,
@@ -29007,6 +29076,7 @@
                 "updated"
               ],
               "legacyStorageMigrated": false,
+              "liveReplayColumns": [],
               "liveReplayFilters": {
                 "activePlayers": "",
                 "featuredMod": "",
@@ -29018,6 +29088,7 @@
                 "search": ""
               },
               "mapVaultPreset": "recommended",
+              "mapVaultSort": "",
               "matchmakerFactions": [
                 "UEF",
                 "Aeon",
@@ -29027,8 +29098,11 @@
               "matchmakerUnselectedQueues": [],
               "modPresets": [],
               "modVaultPreset": "recommended",
+              "modVaultSort": "",
+              "replayListColumns": [],
               "replayVaultPlayer": "",
-              "replaysView": "tiles"
+              "replaysView": "tiles",
+              "vaultPageSize": 0
             },
             "cacheInfo": {
               "totalFiles": 0,
@@ -29088,6 +29162,7 @@
               "cacheSizeAlertGb": 10,
               "confirmDownloadsBeforeJoining": true,
               "keepGeneratedMaps": false,
+              "keepGeneratedMapsLimit": 0,
               "launchWrapper": "",
               "pipeLiveReplay": false
             },
@@ -29208,8 +29283,11 @@
               "uiScale": 100
             },
             "browsing": {
+              "coopBoardColumns": [],
               "customGamesBrowser": {
                 "applyFilters": false,
+                "columnWidths": [],
+                "detailWidth": 0,
                 "hideModded": false,
                 "hidePrivate": false,
                 "hideUnranked": false,
@@ -29249,6 +29327,7 @@
                 "updated"
               ],
               "legacyStorageMigrated": false,
+              "liveReplayColumns": [],
               "liveReplayFilters": {
                 "activePlayers": "",
                 "featuredMod": "",
@@ -29260,6 +29339,7 @@
                 "search": ""
               },
               "mapVaultPreset": "recommended",
+              "mapVaultSort": "",
               "matchmakerFactions": [
                 "UEF",
                 "Aeon",
@@ -29269,8 +29349,11 @@
               "matchmakerUnselectedQueues": [],
               "modPresets": [],
               "modVaultPreset": "recommended",
+              "modVaultSort": "",
+              "replayListColumns": [],
               "replayVaultPlayer": "",
-              "replaysView": "tiles"
+              "replaysView": "tiles",
+              "vaultPageSize": 0
             },
             "cacheInfo": {
               "totalFiles": 0,
@@ -29330,6 +29413,7 @@
               "cacheSizeAlertGb": 10,
               "confirmDownloadsBeforeJoining": true,
               "keepGeneratedMaps": false,
+              "keepGeneratedMapsLimit": 0,
               "launchWrapper": "",
               "pipeLiveReplay": false
             },
@@ -29459,8 +29543,11 @@
               "uiScale": 100
             },
             "browsing": {
+              "coopBoardColumns": [],
               "customGamesBrowser": {
                 "applyFilters": false,
+                "columnWidths": [],
+                "detailWidth": 0,
                 "hideModded": false,
                 "hidePrivate": false,
                 "hideUnranked": false,
@@ -29500,6 +29587,7 @@
                 "updated"
               ],
               "legacyStorageMigrated": false,
+              "liveReplayColumns": [],
               "liveReplayFilters": {
                 "activePlayers": "",
                 "featuredMod": "",
@@ -29511,6 +29599,7 @@
                 "search": ""
               },
               "mapVaultPreset": "recommended",
+              "mapVaultSort": "",
               "matchmakerFactions": [
                 "UEF",
                 "Aeon",
@@ -29520,8 +29609,11 @@
               "matchmakerUnselectedQueues": [],
               "modPresets": [],
               "modVaultPreset": "recommended",
+              "modVaultSort": "",
+              "replayListColumns": [],
               "replayVaultPlayer": "",
-              "replaysView": "tiles"
+              "replaysView": "tiles",
+              "vaultPageSize": 0
             },
             "cacheInfo": {
               "totalFiles": 0,
@@ -29581,6 +29673,7 @@
               "cacheSizeAlertGb": 10,
               "confirmDownloadsBeforeJoining": true,
               "keepGeneratedMaps": false,
+              "keepGeneratedMapsLimit": 0,
               "launchWrapper": "",
               "pipeLiveReplay": false
             },
@@ -29705,8 +29798,11 @@
               "uiScale": 100
             },
             "browsing": {
+              "coopBoardColumns": [],
               "customGamesBrowser": {
                 "applyFilters": false,
+                "columnWidths": [],
+                "detailWidth": 0,
                 "hideModded": false,
                 "hidePrivate": false,
                 "hideUnranked": false,
@@ -29746,6 +29842,7 @@
                 "updated"
               ],
               "legacyStorageMigrated": false,
+              "liveReplayColumns": [],
               "liveReplayFilters": {
                 "activePlayers": "",
                 "featuredMod": "",
@@ -29757,6 +29854,7 @@
                 "search": ""
               },
               "mapVaultPreset": "recommended",
+              "mapVaultSort": "",
               "matchmakerFactions": [
                 "UEF",
                 "Aeon",
@@ -29766,8 +29864,11 @@
               "matchmakerUnselectedQueues": [],
               "modPresets": [],
               "modVaultPreset": "recommended",
+              "modVaultSort": "",
+              "replayListColumns": [],
               "replayVaultPlayer": "",
-              "replaysView": "tiles"
+              "replaysView": "tiles",
+              "vaultPageSize": 0
             },
             "cacheInfo": {
               "totalFiles": 0,
@@ -29827,6 +29928,7 @@
               "cacheSizeAlertGb": 10,
               "confirmDownloadsBeforeJoining": true,
               "keepGeneratedMaps": false,
+              "keepGeneratedMapsLimit": 0,
               "launchWrapper": "",
               "pipeLiveReplay": false
             },
@@ -29951,8 +30053,11 @@
               "uiScale": 100
             },
             "browsing": {
+              "coopBoardColumns": [],
               "customGamesBrowser": {
                 "applyFilters": false,
+                "columnWidths": [],
+                "detailWidth": 0,
                 "hideModded": false,
                 "hidePrivate": false,
                 "hideUnranked": false,
@@ -29992,6 +30097,7 @@
                 "updated"
               ],
               "legacyStorageMigrated": false,
+              "liveReplayColumns": [],
               "liveReplayFilters": {
                 "activePlayers": "",
                 "featuredMod": "",
@@ -30003,6 +30109,7 @@
                 "search": ""
               },
               "mapVaultPreset": "recommended",
+              "mapVaultSort": "",
               "matchmakerFactions": [
                 "UEF",
                 "Aeon",
@@ -30012,8 +30119,11 @@
               "matchmakerUnselectedQueues": [],
               "modPresets": [],
               "modVaultPreset": "recommended",
+              "modVaultSort": "",
+              "replayListColumns": [],
               "replayVaultPlayer": "",
-              "replaysView": "tiles"
+              "replaysView": "tiles",
+              "vaultPageSize": 0
             },
             "cacheInfo": {
               "totalFiles": 0,
@@ -30073,6 +30183,7 @@
               "cacheSizeAlertGb": 10,
               "confirmDownloadsBeforeJoining": true,
               "keepGeneratedMaps": false,
+              "keepGeneratedMapsLimit": 0,
               "launchWrapper": "",
               "pipeLiveReplay": false
             },
@@ -30207,8 +30318,11 @@
               "uiScale": 100
             },
             "browsing": {
+              "coopBoardColumns": [],
               "customGamesBrowser": {
                 "applyFilters": false,
+                "columnWidths": [],
+                "detailWidth": 0,
                 "hideModded": false,
                 "hidePrivate": false,
                 "hideUnranked": false,
@@ -30248,6 +30362,7 @@
                 "updated"
               ],
               "legacyStorageMigrated": false,
+              "liveReplayColumns": [],
               "liveReplayFilters": {
                 "activePlayers": "",
                 "featuredMod": "",
@@ -30259,6 +30374,7 @@
                 "search": ""
               },
               "mapVaultPreset": "recommended",
+              "mapVaultSort": "",
               "matchmakerFactions": [
                 "UEF",
                 "Aeon",
@@ -30268,8 +30384,11 @@
               "matchmakerUnselectedQueues": [],
               "modPresets": [],
               "modVaultPreset": "recommended",
+              "modVaultSort": "",
+              "replayListColumns": [],
               "replayVaultPlayer": "",
-              "replaysView": "tiles"
+              "replaysView": "tiles",
+              "vaultPageSize": 0
             },
             "cacheInfo": {
               "totalFiles": 0,
@@ -30329,6 +30448,7 @@
               "cacheSizeAlertGb": 10,
               "confirmDownloadsBeforeJoining": true,
               "keepGeneratedMaps": false,
+              "keepGeneratedMapsLimit": 0,
               "launchWrapper": "",
               "pipeLiveReplay": false
             },
@@ -30469,8 +30589,11 @@
               "uiScale": 100
             },
             "browsing": {
+              "coopBoardColumns": [],
               "customGamesBrowser": {
                 "applyFilters": false,
+                "columnWidths": [],
+                "detailWidth": 0,
                 "hideModded": false,
                 "hidePrivate": false,
                 "hideUnranked": false,
@@ -30510,6 +30633,7 @@
                 "updated"
               ],
               "legacyStorageMigrated": false,
+              "liveReplayColumns": [],
               "liveReplayFilters": {
                 "activePlayers": "",
                 "featuredMod": "",
@@ -30521,6 +30645,7 @@
                 "search": ""
               },
               "mapVaultPreset": "recommended",
+              "mapVaultSort": "",
               "matchmakerFactions": [
                 "UEF",
                 "Aeon",
@@ -30530,8 +30655,11 @@
               "matchmakerUnselectedQueues": [],
               "modPresets": [],
               "modVaultPreset": "recommended",
+              "modVaultSort": "",
+              "replayListColumns": [],
               "replayVaultPlayer": "",
-              "replaysView": "tiles"
+              "replaysView": "tiles",
+              "vaultPageSize": 0
             },
             "cacheInfo": {
               "totalFiles": 0,
@@ -30591,6 +30719,7 @@
               "cacheSizeAlertGb": 10,
               "confirmDownloadsBeforeJoining": true,
               "keepGeneratedMaps": false,
+              "keepGeneratedMapsLimit": 0,
               "launchWrapper": "",
               "pipeLiveReplay": false
             },
@@ -30743,8 +30872,11 @@
               "uiScale": 100
             },
             "browsing": {
+              "coopBoardColumns": [],
               "customGamesBrowser": {
                 "applyFilters": false,
+                "columnWidths": [],
+                "detailWidth": 0,
                 "hideModded": false,
                 "hidePrivate": false,
                 "hideUnranked": false,
@@ -30784,6 +30916,7 @@
                 "updated"
               ],
               "legacyStorageMigrated": false,
+              "liveReplayColumns": [],
               "liveReplayFilters": {
                 "activePlayers": "",
                 "featuredMod": "",
@@ -30795,6 +30928,7 @@
                 "search": ""
               },
               "mapVaultPreset": "recommended",
+              "mapVaultSort": "",
               "matchmakerFactions": [
                 "UEF",
                 "Aeon",
@@ -30804,8 +30938,11 @@
               "matchmakerUnselectedQueues": [],
               "modPresets": [],
               "modVaultPreset": "recommended",
+              "modVaultSort": "",
+              "replayListColumns": [],
               "replayVaultPlayer": "",
-              "replaysView": "tiles"
+              "replaysView": "tiles",
+              "vaultPageSize": 0
             },
             "cacheInfo": {
               "totalFiles": 0,
@@ -30865,6 +31002,7 @@
               "cacheSizeAlertGb": 10,
               "confirmDownloadsBeforeJoining": true,
               "keepGeneratedMaps": false,
+              "keepGeneratedMapsLimit": 0,
               "launchWrapper": "",
               "pipeLiveReplay": false
             },
@@ -31008,8 +31146,11 @@
               "uiScale": 100
             },
             "browsing": {
+              "coopBoardColumns": [],
               "customGamesBrowser": {
                 "applyFilters": false,
+                "columnWidths": [],
+                "detailWidth": 0,
                 "hideModded": false,
                 "hidePrivate": false,
                 "hideUnranked": false,
@@ -31049,6 +31190,7 @@
                 "updated"
               ],
               "legacyStorageMigrated": false,
+              "liveReplayColumns": [],
               "liveReplayFilters": {
                 "activePlayers": "",
                 "featuredMod": "",
@@ -31060,6 +31202,7 @@
                 "search": ""
               },
               "mapVaultPreset": "recommended",
+              "mapVaultSort": "",
               "matchmakerFactions": [
                 "UEF",
                 "Aeon",
@@ -31069,8 +31212,11 @@
               "matchmakerUnselectedQueues": [],
               "modPresets": [],
               "modVaultPreset": "recommended",
+              "modVaultSort": "",
+              "replayListColumns": [],
               "replayVaultPlayer": "",
-              "replaysView": "tiles"
+              "replaysView": "tiles",
+              "vaultPageSize": 0
             },
             "cacheInfo": {
               "totalFiles": 0,
@@ -31130,6 +31276,7 @@
               "cacheSizeAlertGb": 10,
               "confirmDownloadsBeforeJoining": true,
               "keepGeneratedMaps": false,
+              "keepGeneratedMapsLimit": 0,
               "launchWrapper": "",
               "pipeLiveReplay": false
             },
@@ -31275,8 +31422,11 @@
               "uiScale": 100
             },
             "browsing": {
+              "coopBoardColumns": [],
               "customGamesBrowser": {
                 "applyFilters": false,
+                "columnWidths": [],
+                "detailWidth": 0,
                 "hideModded": false,
                 "hidePrivate": false,
                 "hideUnranked": false,
@@ -31316,6 +31466,7 @@
                 "updated"
               ],
               "legacyStorageMigrated": false,
+              "liveReplayColumns": [],
               "liveReplayFilters": {
                 "activePlayers": "",
                 "featuredMod": "",
@@ -31327,6 +31478,7 @@
                 "search": ""
               },
               "mapVaultPreset": "recommended",
+              "mapVaultSort": "",
               "matchmakerFactions": [
                 "UEF",
                 "Aeon",
@@ -31336,8 +31488,11 @@
               "matchmakerUnselectedQueues": [],
               "modPresets": [],
               "modVaultPreset": "recommended",
+              "modVaultSort": "",
+              "replayListColumns": [],
               "replayVaultPlayer": "",
-              "replaysView": "tiles"
+              "replaysView": "tiles",
+              "vaultPageSize": 0
             },
             "cacheInfo": {
               "totalFiles": 0,
@@ -31397,6 +31552,7 @@
               "cacheSizeAlertGb": 10,
               "confirmDownloadsBeforeJoining": true,
               "keepGeneratedMaps": false,
+              "keepGeneratedMapsLimit": 0,
               "launchWrapper": "",
               "pipeLiveReplay": false
             },
@@ -31544,7 +31700,15 @@
                         "constraint": "contains",
                         "value": "NOISY"
                       }
-                    ]
+                    ],
+                    "columnWidths": [
+                      320,
+                      180,
+                      90,
+                      110,
+                      80
+                    ],
+                    "detailWidth": 360
                   },
                   "matchmakerUnselectedQueues": [
                     "  ladder_1v1 ",
@@ -31594,6 +31758,19 @@
                   ],
                   "mapVaultPreset": "recommended",
                   "modVaultPreset": "recommended",
+                  "mapVaultSort": "newest",
+                  "modVaultSort": "rating",
+                  "vaultPageSize": 48,
+                  "replayListColumns": [
+                    64,
+                    240,
+                    150
+                  ],
+                  "liveReplayColumns": [
+                    120,
+                    200
+                  ],
+                  "coopBoardColumns": [],
                   "modPresets": [],
                   "leaderboardRatingColumns": [
                     "rating",
@@ -31617,8 +31794,17 @@
               "uiScale": 100
             },
             "browsing": {
+              "coopBoardColumns": [],
               "customGamesBrowser": {
                 "applyFilters": true,
+                "columnWidths": [
+                  320,
+                  180,
+                  90,
+                  110,
+                  80
+                ],
+                "detailWidth": 360,
                 "hideModded": true,
                 "hidePrivate": true,
                 "hideUnranked": false,
@@ -31668,6 +31854,10 @@
                 "updated"
               ],
               "legacyStorageMigrated": true,
+              "liveReplayColumns": [
+                120,
+                200
+              ],
               "liveReplayFilters": {
                 "activePlayers": "4",
                 "featuredMod": "faf",
@@ -31679,6 +31869,7 @@
                 "search": "tournament"
               },
               "mapVaultPreset": "recommended",
+              "mapVaultSort": "newest",
               "matchmakerFactions": [
                 "Cybran"
               ],
@@ -31687,8 +31878,15 @@
               ],
               "modPresets": [],
               "modVaultPreset": "recommended",
+              "modVaultSort": "rating",
+              "replayListColumns": [
+                64,
+                240,
+                150
+              ],
               "replayVaultPlayer": "",
-              "replaysView": "list"
+              "replaysView": "list",
+              "vaultPageSize": 48
             },
             "cacheInfo": {
               "totalFiles": 0,
@@ -31748,6 +31946,7 @@
               "cacheSizeAlertGb": 10,
               "confirmDownloadsBeforeJoining": true,
               "keepGeneratedMaps": false,
+              "keepGeneratedMapsLimit": 0,
               "launchWrapper": "",
               "pipeLiveReplay": false
             },
@@ -31992,7 +32191,11 @@
       },
       {
         "status": {
-          "type": "compressing"
+          "type": "compressing",
+          "payload": {
+            "doneBytes": 3,
+            "totalBytes": 10
+          }
         },
         "expected": true
       },

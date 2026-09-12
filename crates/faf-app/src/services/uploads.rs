@@ -6,7 +6,22 @@ use crate::runtime::{EventSink, ServiceCtx};
 
 pub async fn handle(cmd: UploadsCommand, ctx: &ServiceCtx, out: &EventSink) {
     match cmd {
-        UploadsCommand::Open { request } => out.emit(UploadsEvent::Opened { request }),
+        UploadsCommand::Open { request } => {
+            // The dialog opens now and the picture arrives when it arrives:
+            // reading a `.scmap` is a file read and a PNG build, and a dialog
+            // that waits for its own illustration is a dialog that stutters.
+            out.emit(UploadsEvent::Opened {
+                request: request.clone(),
+            });
+            let uploads = ctx.ports.uploads.clone();
+            let sink = out.clone();
+            tokio::spawn(async move {
+                let data_url = uploads.map_preview(request).await;
+                if !data_url.is_empty() {
+                    sink.emit(UploadsEvent::PreviewRead { data_url });
+                }
+            });
+        }
         UploadsCommand::Close => out.emit(UploadsEvent::Closed),
         UploadsCommand::SetRanked { ranked } => out.emit(UploadsEvent::RankedChanged { ranked }),
         UploadsCommand::Start => start(ctx, out).await,

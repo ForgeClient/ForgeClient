@@ -279,6 +279,43 @@ export type BrowsingPreferences = {
 	/**  Active preset filter in the mod vault ("recommended", "favorites", "rating", "ui", "newest", "all"). */
 	modVaultPreset: string,
 	/**
+	 *  Chosen sort order in the map vault, empty to follow the preset.
+	 *
+	 *  Persisted for the same reason the preset is: leaving a tab and coming
+	 *  back put the list in an order nobody asked for, and the order is the
+	 *  half of a browse that a preset does not decide.
+	 */
+	mapVaultSort: string,
+	/**  Chosen sort order in the mod vault, empty to follow the preset. */
+	modVaultSort: string,
+	/**
+	 *  How many entries a vault page shows, or `0` for the designed default.
+	 *
+	 *  One number for maps and mods, installed and vault alike: the question
+	 *  is about how much of the screen a reader wants filled, and answering it
+	 *  four times over would be four settings saying the same thing.
+	 */
+	vaultPageSize: number,
+	/**
+	 *  Column widths in the replay list, in pixels and in the order the
+	 *  columns are drawn. Empty means the designed widths.
+	 *
+	 *  The same shape and the same reason as
+	 *  `CustomGameBrowserPreferences::column_widths`: the columns worth
+	 *  widening are the ones whose contents the reader is scanning, and which
+	 *  those are differs per person. Stored rather than kept in the browser so
+	 *  it survives a reinstall, like every other browsing preference here.
+	 */
+	replayListColumns: number[],
+	/**
+	 *  The same for the live-replay table, which is a different table with
+	 *  different columns and therefore a different set of widths. Sharing one
+	 *  list between them would have a drag in one tab move the other.
+	 */
+	liveReplayColumns: number[],
+	/**  And for the co-op leaderboard. */
+	coopBoardColumns: number[],
+	/**
 	 *  Named mod sets the host dialog can re-apply in one click.
 	 *
 	 *  Only the word is shared with `mod_vault_preset` above, which is a vault
@@ -1428,6 +1465,24 @@ export type CustomGameBrowserPreferences = {
 	hideUnranked: boolean,
 	applyFilters: boolean,
 	rules: CustomGameFilterRule[],
+	/**
+	 *  Pixel widths of the list view's columns, left to right.
+	 *
+	 *  Empty means "the stylesheet decides", which is both the default and
+	 *  what a reset goes back to. A short list is padded the same way: a
+	 *  column the user never dragged keeps its designed width rather than
+	 *  collapsing because a neighbour was resized.
+	 */
+	columnWidths: number[],
+	/**
+	 *  Pixel width of the detail panel beside the game list, or `0` for the
+	 *  designed default.
+	 *
+	 *  The tiles already resize (`gameTileColumns`); the panel beside them did
+	 *  not, so a wider preview could only be had by making the browser
+	 *  narrower and nothing offered that trade.
+	 */
+	detailWidth: number,
 };
 
 export type CustomGameFilterConstraint = "contains" | "starts" | "ends" | "equals" | "notEquals" | "above" | "below";
@@ -2074,6 +2129,11 @@ export type Game = {
 	ratingMin: number | null,
 	ratingMax: number | null,
 	/**
+	 *  Whether the host asked the server to keep out-of-range players out,
+	 *  rather than merely stating a preferred range. See [`rating_gate_blocks`].
+	 */
+	enforceRatingRange: boolean,
+	/**
 	 *  Team number to player names. Observer teams use the server's `-1`/`null`
 	 *  keys, matching the reference client's game model.
 	 */
@@ -2089,10 +2149,13 @@ export type GameCacheInfo = {
 };
 
 /**
- *  The server's `game_launch` order: everything the connectivity + launch chain
- *  (a later phase) needs to actually start the game. For now we only model and
- *  surface it; nothing acts on it yet. Mirrors the relevant fields of the Python
- *  client's `GameLaunchCommand` (`src/protocol/lobbyprotocol.py`).
+ *  The server's `game_launch` order: everything the connectivity and launch
+ *  chain needs to actually start the game.
+ *
+ *  `services::launcher` acts on this: it starts the ICE adapter, stages the
+ *  map and featured mod, and launches Forged Alliance. Mirrors the relevant
+ *  fields of the Python client's `GameLaunchCommand`
+ *  (`src/protocol/lobbyprotocol.py`).
  */
 export type GameLaunch = {
 	uid: number,
@@ -2201,6 +2264,19 @@ export type GamePreferences = {
 	 *  kept while it was on.
 	 */
 	keepGeneratedMaps?: boolean,
+	/**
+	 *  How many generated maps the keep list may hold, or `0` for no limit.
+	 *
+	 *  The switch above answers "keep them"; this answers "how many". Without
+	 *  it the two choices are keep nothing and keep everything, and the thread
+	 *  that asked for this had watched the second one fill a system drive: a
+	 *  generated map is kept because it was good, and the hundred before it
+	 *  are still on the disk saying nothing.
+	 *
+	 *  Oldest first when the cap is reached, which is what makes this a cache
+	 *  rather than a quota that refuses new maps once it is full.
+	 */
+	keepGeneratedMapsLimit?: number,
 };
 
 export type GeneralPreferences = {
@@ -3085,6 +3161,30 @@ export type LobbyEvent = { type: "connecting" } | { type: "connected" } |
 	games: Game[],
 } } | { type: "liveGamesUpdated"; payload: {
 	games: Game[],
+} } |
+/**
+ *  The open-games list changed, said as a change rather than as a list.
+ *
+ *  The server pushes one `game_info` per lobby that opens, fills, empties
+ *  or starts, and answering each with the whole list meant a clone of every
+ *  game four times over before the frontend replaced its array and React
+ *  re-rendered every card. A busy evening is hundreds of lobbies and a
+ *  frame a second.
+ *
+ *  [`Self::GamesUpdated`] is still how the list is *replaced*: the server's
+ *  opening dump arrives as one array, and a reconnect has to start from
+ *  what the new socket says rather than from what the old one left behind.
+ */
+{ type: "gamesChanged"; payload: {
+	/**  Games that are new to the list, or whose contents changed. */
+	upserted: Game[],
+	/**  Games that left the open list, by id. They either started or died. */
+	removed: number[],
+} } |
+/**  The same, for the in-progress list. */
+{ type: "liveGamesChanged"; payload: {
+	upserted: Game[],
+	removed: number[],
 } } | { type: "matchmakerQueuesUpdated"; payload: {
 	queues: MatchmakerQueue[],
 } } | { type: "matchmakingUpdated"; payload: {
@@ -4833,6 +4933,11 @@ export type PlayerMapStat = {
 	games: number,
 	wins: number,
 	losses: number,
+	/**
+	 *  Games on this map that ended level, which the win rate excludes rather
+	 *  than counts as half a loss.
+	 */
+	draws: number,
 	/**  Most recent appearance, ISO. Empty when no game on this map stated one. */
 	lastPlayed: string,
 };
@@ -4851,8 +4956,25 @@ export type PlayerMapStats = {
 	totalGames: number,
 	wins: number,
 	losses: number,
-	/**  Games the API returned without a decided result (draws, unfinished). */
+	/**  Games that ended level, counted and shown but kept out of the win rate. */
 	undecided: number,
+	/**
+	 *  Games that decide nothing, either because nothing says who won or
+	 *  because no rating moved.
+	 *
+	 *  A custom lobby with mods on, a game that desynced its way out of a
+	 *  result, one abandoned before it was scored: FAF rates none of them, and
+	 *  the API still returns rows for each. Those rows carried a `result` of
+	 *  `DEFEAT` far more often than `VICTORY`, because a game only reports
+	 *  defeat when someone is killed or leaves and nothing reports the winner.
+	 *  Counting them dragged every profile towards the same 40%, which is what
+	 *  made the figure obviously wrong rather than merely inaccurate.
+	 *
+	 *  `faftracker` keeps these in two buckets -- no result at all, and a
+	 *  result with no rating behind it -- and the distinction changes nothing a
+	 *  reader of this table would do, so they are one number here.
+	 */
+	unranked: number,
 	/**
 	 *  How many of the generated row's games got there by having no map name
 	 *  at all, rather than by carrying a recognisable generated one.
@@ -8360,7 +8482,18 @@ export type UploadRequest = {
  *  because zipping a large map is slow enough that a single "working…" would
  *  look hung.
  */
-export type UploadStatus = { type: "idle" } | { type: "compressing" } |
+export type UploadStatus = { type: "idle" } |
+/**
+ *  Bytes packed so far, and the folder's total size.
+ *
+ *  Measured rather than counted, because "Compressing…" on its own is the
+ *  one stage that can sit still for a minute on a large map and give no
+ *  sign of which minute it is in.
+ */
+{ type: "compressing"; payload: {
+	doneBytes: number,
+	totalBytes: number,
+} } |
 /**  Bytes sent so far, and the archive's total size. */
 { type: "uploading"; payload: {
 	sentBytes: number,
@@ -8385,12 +8518,28 @@ export type UploadsEvent = { type: "opened"; payload: {
 	ranked: boolean,
 } } | { type: "progressed"; payload: {
 	status: UploadStatus,
+} } |
+/**
+ *  The preview read out of the map being published, or an empty string
+ *  when there was none to read. Not an error worth showing: a dialog
+ *  without a picture is still a working dialog.
+ */
+{ type: "previewRead"; payload: {
+	dataUrl: string,
 } };
 
 export type UploadsState = {
 	/**  The publish dialog's subject, or `None` when it is closed. */
 	request: UploadRequest | null,
 	status: UploadStatus,
+	/**
+	 *  The map's own preview, read out of its `.scmap`, as a data URL.
+	 *
+	 *  Empty for a mod, for a map whose file cannot be read, and until the read
+	 *  finishes. The vault cannot supply this one: a map that is being uploaded
+	 *  for the first time has no vault entry to have a thumbnail on.
+	 */
+	preview: string,
 };
 
 /**  A parameter combination the generator will reject, or advise against. */

@@ -10,6 +10,7 @@ import { flagSrc } from "../../shared/countryFlags";
 import { useCountryLabel } from "../../shared/useCountryLabel";
 import { noteForPlayer } from "../../shared/playerNotes";
 import { EMPTY_REPLAY_QUERY } from "../../shared/replayQuery";
+import { requestReplaySearch } from "../replays/replaySearchIntent";
 import { PlayerAchievements } from "./PlayerAchievements";
 import { PlayerClanView } from "./PlayerClanView";
 import { PlayerOverview } from "./PlayerOverview";
@@ -363,7 +364,7 @@ export function PlayerCardModal() {
   };
   const browseReplays = () => {
     if (!profile) return;
-    ipc.send({ kind: "Replays", command: { type: "searchVault", payload: { query: { ...EMPTY_REPLAY_QUERY, player: profile.login, exactPlayer: true } } } });
+    requestReplaySearch({ ...EMPTY_REPLAY_QUERY, player: profile.login, exactPlayer: true });
     ipc.send({ kind: "Nav", command: { type: "select", payload: { tab: "replays" } } });
     closePlayerCard();
   };

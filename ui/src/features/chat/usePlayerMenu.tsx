@@ -21,6 +21,7 @@ import { useAppStore } from "../../store/store";
 import { assignedPlayerColor, includesName, nickKey } from "../../shared/nameColorsUtil";
 import { noteForPlayer } from "../../shared/playerNotes";
 import { EMPTY_REPLAY_QUERY } from "../../shared/replayQuery";
+import { requestReplaySearch } from "../replays/replaySearchIntent";
 import { openPlayerCard } from "../player-card/playerCardActions";
 import { PlayerNoteModal } from "../player-card/PlayerNoteEditor";
 import { UserMenu, type UserMenuTarget } from "./UserMenu";
@@ -143,13 +144,7 @@ export function usePlayerMenu(): {
   }, []);
 
   const viewReplays = useCallback((username: string) => {
-    ipc.send({
-      kind: "Replays",
-      command: {
-        type: "searchVault",
-        payload: { query: { ...EMPTY_REPLAY_QUERY, player: username, exactPlayer: true } },
-      },
-    });
+    requestReplaySearch({ ...EMPTY_REPLAY_QUERY, player: username, exactPlayer: true });
     ipc.send({ kind: "Nav", command: { type: "select", payload: { tab: "replays" } } });
   }, []);
 

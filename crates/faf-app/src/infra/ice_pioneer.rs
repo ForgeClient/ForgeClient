@@ -65,33 +65,26 @@ fn default_adapter_path() -> String {
     } else {
         "faf-pioneer"
     };
-    resolve_adapter_path(
-        file_name,
-        std::env::current_exe().ok().as_deref(),
-        std::env::current_dir().ok().as_deref(),
-    )
-    .unwrap_or_else(|| file_name.into())
-    .to_string_lossy()
-    .into_owned()
+    resolve_adapter_path(file_name, std::env::current_exe().ok().as_deref())
+        .unwrap_or_else(|| file_name.into())
+        .to_string_lossy()
+        .into_owned()
 }
 
-fn resolve_adapter_path(
-    file_name: &str,
-    executable: Option<&Path>,
-    working_directory: Option<&Path>,
-) -> Option<PathBuf> {
-    let executable_roots = executable
+/// Where the adapter may be looked for, and deliberately nowhere else.
+///
+/// The working directory used to be searched too, with every ancestor of it up
+/// to the drive root. This binary carries the player's game traffic, so a copy
+/// found in whatever folder the client happened to be started from is not a
+/// convenience: see `infra::helper_search_roots` for the whole argument.
+fn resolve_adapter_path(file_name: &str, executable: Option<&Path>) -> Option<PathBuf> {
+    // A development executable is in target/debug, two levels below the
+    // tracked helper. Packaged builds find it on the first root.
+    let depth = if cfg!(debug_assertions) { 4 } else { 1 };
+    executable
         .and_then(Path::parent)
         .into_iter()
-        // A development executable is in target/debug, two levels below the
-        // tracked helper. Packaged builds find it on the first root.
-        .flat_map(|directory| directory.ancestors().take(4));
-    let working_roots = working_directory
-        .into_iter()
-        .flat_map(|directory| directory.ancestors().take(3));
-
-    executable_roots
-        .chain(working_roots)
+        .flat_map(|directory| directory.ancestors().take(depth))
         // `natives/` is where the build script downloads it and where the
         // bundle puts it, alongside faf-uid and the Java adapter. The bare and
         // `resources/` candidates stay: an installed build from before the
@@ -561,7 +554,7 @@ mod tests {
         fs::write(&adapter, b"test adapter").unwrap();
 
         assert_eq!(
-            resolve_adapter_path("faf-pioneer.exe", Some(&executable), None),
+            resolve_adapter_path("faf-pioneer.exe", Some(&executable)),
             Some(adapter)
         );
     }
@@ -579,7 +572,7 @@ mod tests {
         fs::write(&adapter, b"test adapter").unwrap();
 
         assert_eq!(
-            resolve_adapter_path("faf-pioneer.exe", Some(&executable), None),
+            resolve_adapter_path("faf-pioneer.exe", Some(&executable)),
             Some(adapter)
         );
     }
@@ -598,7 +591,7 @@ mod tests {
         fs::write(&current, b"downloaded adapter").unwrap();
 
         assert_eq!(
-            resolve_adapter_path("faf-pioneer.exe", Some(&executable), None),
+            resolve_adapter_path("faf-pioneer.exe", Some(&executable)),
             Some(current)
         );
     }

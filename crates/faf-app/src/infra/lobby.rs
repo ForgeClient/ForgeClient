@@ -334,6 +334,7 @@ fn seed_games() -> Vec<Game> {
             hosted_at: None,
             rating_min: None,
             rating_max: None,
+            enforce_rating_range: false,
             teams: BTreeMap::from([("1".into(), vec!["Stormlord".into()])]),
             sim_mods: Default::default(),
         },
@@ -354,6 +355,7 @@ fn seed_games() -> Vec<Game> {
             hosted_at: None,
             rating_min: Some(700),
             rating_max: Some(1600),
+            enforce_rating_range: false,
             teams: BTreeMap::from([
                 (
                     "1".into(),
@@ -380,6 +382,7 @@ fn seed_games() -> Vec<Game> {
             hosted_at: None,
             rating_min: None,
             rating_max: None,
+            enforce_rating_range: false,
             teams: Default::default(),
             sim_mods: Default::default(),
         },
@@ -432,6 +435,7 @@ fn evolve(games: &mut Vec<Game>, tick: u32) {
             hosted_at: None,
             rating_min: None,
             rating_max: None,
+            enforce_rating_range: false,
             teams: Default::default(),
             sim_mods: Default::default(),
         });

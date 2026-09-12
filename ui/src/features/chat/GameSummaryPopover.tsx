@@ -89,7 +89,11 @@ export function GameSummaryPopover({ presence, social, vault }: Props) {
         ref={anchor}
         type="button"
         className="chat-game-badge"
-        aria-label={`${status}: ${presence.game.title} on ${presentation.displayName}`}
+        aria-label={t("chat.gameBadge.aria", {
+          status,
+          title: presence.game.title,
+          map: presentation.displayName,
+        })}
         aria-describedby={open ? tooltipId : undefined}
         onMouseEnter={() => setOpen(true)}
         onMouseLeave={() => setOpen(false)}

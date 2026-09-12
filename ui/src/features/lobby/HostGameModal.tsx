@@ -6,9 +6,10 @@ import { RangeSlider } from "../../design-system/RangeSlider";
 import { ipc } from "../../ipc/client";
 import { useAppStore } from "../../store/store";
 import { focusListboxOption, nextListboxIndex } from "../../shared/listboxNavigation";
-import { isGeneratedMap, OFFICIAL_BASE_MAPS } from "../../shared/mapPresentation";
+import { OFFICIAL_BASE_MAPS } from "../../shared/mapPresentation";
 import { GameMapImage } from "./GameMapImage";
 import { MapPreviewDialog } from "../maps/MapPreviewZoom";
+import { isOfficialMap, MapUninstallDialog } from "../maps/MapVaultComponents";
 import { GenerateMapModal } from "../maps/GenerateMapModal";
 import { generatedMapDescriptionRows } from "../maps/generatedMapDescription";
 import { HostModsColumn } from "./host/HostModsColumn";
@@ -58,7 +59,12 @@ type HostMap = {
   description?: string;
   version?: string;
   author?: string | null;
+  /** Whether games on it count towards ratings. Base maps always do. */
+  ranked: boolean;
 };
+
+/** Which maps the ranked filter lets through. */
+type RankedFilter = "all" | "ranked" | "unranked";
 
 interface FeaturedModOption {
   id: string;
@@ -146,6 +152,9 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
   const [ratingMax, setRatingMax] = useState(remembered.ratingMax);
 
   const [mapSearch, setMapSearch] = useState("");
+  const [rankedFilter, setRankedFilter] = useState<RankedFilter>("all");
+  const [copiedTitle, setCopiedTitle] = useState(false);
+  const [pendingUninstall, setPendingUninstall] = useState<HostMap | null>(null);
   const [widthKm, setWidthKm] = useState<Range>(NO_RANGE);
   const [heightKm, setHeightKm] = useState<Range>(NO_RANGE);
   const [playerCount, setPlayerCount] = useState<Range>(NO_RANGE);
@@ -220,6 +229,7 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
         width: base.width,
         height: base.height,
         version: "1.0",
+        ranked: true,
         description: t("lobby.host.mapOfficialDescription"),
       });
     }
@@ -276,6 +286,9 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
         width,
         height,
         version: version ?? undefined,
+        // The vault knows; a base map the vault has never heard of is rated by
+        // definition. Same rule the Maps tab's installed list uses.
+        ranked: vaultMeta?.ranked ?? isOfficialMap(installed.folderName),
         description,
         author: vaultMeta?.author,
       });
@@ -297,6 +310,8 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
         width: 1024,
         height: 1024,
         version: "1.0",
+        // A generated map exists in no vault, so it is rated by nothing.
+        ranked: false,
         description: t("lobby.host.mapGeneratedDescription"),
       });
     }
@@ -315,8 +330,12 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
           withinRange(toKilometres(map.width), widthKm) &&
           withinRange(toKilometres(map.height), heightKm),
       )
+      // Filters rather than tabs, which is what the thread asked for: a host
+      // who only ever starts rated games wants that to be one setting, not a
+      // section they have to be in.
+      .filter((map) => rankedFilter === "all" || map.ranked === (rankedFilter === "ranked"))
       .sort((left, right) => left.displayName.localeCompare(right.displayName));
-  }, [catalogueMaps, heightKm, mapSearch, playerCount, widthKm]);
+  }, [catalogueMaps, heightKm, mapSearch, playerCount, rankedFilter, widthKm]);
 
   // Favourites are already a thing in the map vault, kept as folder names in
   // the browsing preferences. This reuses that list rather than starting a
@@ -360,12 +379,20 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
 
   // Reset by itself, so the tick is feedback rather than a state the button
   // gets stuck in.
-  const [copiedName, setCopiedName] = useState(false);
   useEffect(() => {
-    if (!copiedName) return;
-    const timer = window.setTimeout(() => setCopiedName(false), 2_000);
+    if (!copiedTitle) return;
+    const timer = window.setTimeout(() => setCopiedTitle(false), 2_000);
     return () => window.clearTimeout(timer);
-  }, [copiedName]);
+  }, [copiedTitle]);
+
+  // Only a map that is really on disk, and never one the game ships: a base
+  // map cannot be deleted and a vault entry that is not installed has nothing
+  // here to delete.
+  const canUninstallChosen = Boolean(
+    chosen
+    && !isOfficialMap(chosen.folderName)
+    && maps.installed.some((map) => map.folderName === chosen.folderName),
+  );
 
   // Empty for every map whose description is prose, which is every map that
   // was not generated. Memoised on the description alone: reparsing it on each
@@ -376,7 +403,8 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
   );
 
   // Shown on the filter button so a narrowed list is never a mystery.
-  const activeFilterCount = [widthKm, heightKm, playerCount].filter(isBounded).length;
+  const activeFilterCount =
+    [widthKm, heightKm, playerCount].filter(isBounded).length + (rankedFilter === "all" ? 0 : 1);
 
   const titleError = !title.trim()
     ? t("lobby.host.error.title")
@@ -386,7 +414,10 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
   const passwordError = passwordEnabled && !PRINTABLE_ASCII.test(password)
     ? t("lobby.host.error.passwordAscii")
     : "";
-  const ratingError = ratingEnabled && ratingMin > ratingMax
+  // Checked whether or not the range is enforced: a back-to-front range is a
+  // mistake worth pointing out while it is being typed, not only once the
+  // checkbox is ticked.
+  const ratingError = ratingMin > ratingMax
     ? t("lobby.host.error.ratingOrder")
     : "";
   const formError = titleError || passwordError || ratingError || (!chosen ? t("lobby.host.error.selectMap") : "");
@@ -440,6 +471,8 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
             enforceRatingRange: ratingEnabled,
             ratingMin: ratingEnabled ? ratingMin : null,
             ratingMax: ratingEnabled ? ratingMax : null,
+            // Only sent when enforced. An advisory range the server does not
+            // act on is the badge that started this: it looked like a rule.
           },
         },
       },
@@ -552,9 +585,12 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
             <span>{t("lobby.host.enforceRating")}</span>
           </label>
           <div className="host-rating-inputs">
+            {/* Never disabled. A range that cannot be typed until a checkbox
+                is found is a range nobody sets, and the numbers are useful on
+                their own: unenforced they are the sign on the door, enforced
+                they are the door. */}
             <NumberInput
               className="number-input"
-              disabled={!ratingEnabled}
               value={ratingMin}
               min={-9999}
               max={9999}
@@ -565,7 +601,6 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
             <span className="muted">{t("lobby.host.ratingTo")}</span>
             <NumberInput
               className="number-input"
-              disabled={!ratingEnabled}
               value={ratingMax}
               min={-9999}
               max={9999}
@@ -575,6 +610,14 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
             />
           </div>
           {ratingError && <small className="host-field-error host-rating-error">{ratingError}</small>}
+          {/* The difference the checkbox makes, said where it is made. The
+              report was that an enforced range "merely added a badge": it did,
+              because the flag never left the client. */}
+          <small className="host-field-hint muted">
+            {ratingEnabled
+              ? t("lobby.host.enforceRatingOn")
+              : t("lobby.host.enforceRatingOff")}
+          </small>
         </div>
         </div>
       </section>
@@ -709,6 +752,34 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
                     high={playerCount.high}
                     onChange={(low, high) => setPlayerCount({ low, high })}
                   />
+                  <div className="host-map-filter-choice">
+                    <span className="host-map-filter-choice-label">
+                      {t("lobby.host.filterRanked")}
+                    </span>
+                    <div
+                      className="settings-segmented surface"
+                      role="group"
+                      aria-label={t("lobby.host.filterRanked")}
+                    >
+                      {(["all", "ranked", "unranked"] as RankedFilter[]).map((value) => (
+                        <button
+                          type="button"
+                          key={value}
+                          className={rankedFilter === value ? "is-active" : ""}
+                          aria-pressed={rankedFilter === value}
+                          onClick={() => setRankedFilter(value)}
+                        >
+                          {t(
+                            value === "all"
+                              ? "lobby.host.filterRankedAll"
+                              : value === "ranked"
+                                ? "lobby.host.filterRankedOnly"
+                                : "lobby.host.filterUnrankedOnly",
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <button
                     type="button"
                     className="host-map-filter-reset"
@@ -717,6 +788,7 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
                       setWidthKm(NO_RANGE);
                       setHeightKm(NO_RANGE);
                       setPlayerCount(NO_RANGE);
+                      setRankedFilter("all");
                     }}
                   >
                     {t("lobby.host.filterReset")}
@@ -824,49 +896,41 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
                   <Icon name="maps" size={32} />
                 </div>
               )}
-              <div className="host-preview-overlay">
-                <span className="host-preview-title" title={chosen?.displayName ?? t("lobby.host.selectMap")}>
-                  {chosen?.displayName ?? t("lobby.host.selectMap")}
-                </span>
-              </div>
+            </div>
+
+            {/* The name, under the picture rather than printed over it. The
+                overlay dimmed the corner of every preview to repeat a name the
+                row below already carried, which is the part of the map a
+                reader is most likely to be looking at. The button copies what
+                is written here: the map's name as everyone says it, not the
+                folder it happens to live in, which is the row below. */}
+            <div className="host-preview-name">
+              <span title={chosen?.displayName ?? t("lobby.host.selectMap")}>
+                {chosen?.displayName ?? t("lobby.host.selectMap")}
+              </span>
+              {chosen && (
+                <button
+                  type="button"
+                  className="host-map-fullname-copy"
+                  aria-label={t(
+                    copiedTitle ? "lobby.host.mapTitleCopied" : "lobby.host.copyMapTitle",
+                  )}
+                  title={t(copiedTitle ? "lobby.host.mapTitleCopied" : "lobby.host.copyMapTitle")}
+                  onClick={() =>
+                    ipc.run(
+                      navigator.clipboard
+                        .writeText(chosen.displayName)
+                        .then(() => setCopiedTitle(true)),
+                    )
+                  }
+                >
+                  <Icon name={copiedTitle ? "check" : "copy"} size={13} />
+                </button>
+              )}
             </div>
 
             {chosen && (
               <div className="host-map-info-section">
-                {/* The full folder name. The overlay on the picture shows the
-                    display name and truncates it, and for a generated map the
-                    name is not a label but the whole recipe: it is what the
-                    Generate map dialog takes to rebuild this exact map, and
-                    what somebody asking "which map is that" needs to be given.
-                    Same row and the same strings as the lobby's preview dialog,
-                    because it is the same fact about the same thing. */}
-                <div className="host-map-fullname">
-                  <span>{t("lobby.browser.mapFullName")}</span>
-                  <code>{chosen.folderName}</code>
-                  <button
-                    type="button"
-                    className="host-map-fullname-copy"
-                    aria-label={t(
-                      copiedName ? "lobby.browser.mapNameCopied" : "lobby.browser.copyMapName",
-                    )}
-                    title={t(
-                      copiedName
-                        ? "lobby.browser.mapNameCopied"
-                        : isGeneratedMap(chosen.folderName)
-                          ? "lobby.browser.copyMapNameGenerated"
-                          : "lobby.browser.copyMapName",
-                    )}
-                    onClick={() =>
-                      ipc.run(
-                        navigator.clipboard
-                          .writeText(chosen.folderName)
-                          .then(() => setCopiedName(true)),
-                      )
-                    }
-                  >
-                    <Icon name={copiedName ? "check" : "copy"} size={13} />
-                  </button>
-                </div>
                 <div className="host-map-info-row">
                   <div className="host-map-info-item" title={t("lobby.host.mapPlayerCapacity")}>
                     <Icon name="users" size={13} />
@@ -886,12 +950,20 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
                   </div>
                 </div>
                 {(chosen.version || chosen.author) && (
-                  <dl className="host-map-facts">
-                    <dt>{t("lobby.host.mapAuthor")}</dt>
-                    <dd>{chosen.author || t("lobby.host.mapAuthorUnknown")}</dd>
-                    <dt>{t("lobby.host.mapVersion")}</dt>
-                    <dd>{chosen.version || t("lobby.host.mapAuthorUnknown")}</dd>
-                  </dl>
+                  /* The same row shape as the capacity and the size above,
+                     rather than a definition list that sets its own type and
+                     its own spacing. Four facts about one map should look like
+                     four facts about one map. */
+                  <div className="host-map-info-row">
+                    <div className="host-map-info-item" title={t("lobby.host.mapAuthor")}>
+                      <Icon name="edit" size={13} />
+                      <span>{chosen.author || t("lobby.host.mapAuthorUnknown")}</span>
+                    </div>
+                    <div className="host-map-info-item" title={t("lobby.host.mapVersion")}>
+                      <Icon name="changelog" size={13} />
+                      <span>{chosen.version || t("lobby.host.mapAuthorUnknown")}</span>
+                    </div>
+                  </div>
                 )}
                 {/* A generated map's description is not prose: it is the
                     generator's parameter dump, one line, with its escapes
@@ -916,6 +988,21 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
                     <p className="host-map-description">{chosen.description}</p>
                   )
                 )}
+                {/* Under the description, which is as far from the map list as
+                    this column goes: picking through a few hundred maps for
+                    something to host is exactly when a delete button near the
+                    rows would get hit by accident. Only for a map that is on
+                    disk and not part of the game. */}
+                {canUninstallChosen && (
+                  <button
+                    type="button"
+                    className="host-map-delete"
+                    onClick={() => setPendingUninstall(chosen)}
+                  >
+                    <Icon name="trash" size={13} />
+                    {t("lobby.host.deleteMap")}
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -930,6 +1017,23 @@ export const HostGameModal = memo(function HostGameModal({ onClose, initialTitle
           {t("lobby.host.submit")}
         </Button>
       </div>
+
+      {pendingUninstall && (
+        <MapUninstallDialog
+          mapName={pendingUninstall.displayName}
+          onCancel={() => setPendingUninstall(null)}
+          onConfirm={() => {
+            ipc.send({
+              kind: "Maps",
+              command: {
+                type: "uninstallMap",
+                payload: { folderName: pendingUninstall.folderName },
+              },
+            });
+            setPendingUninstall(null);
+          }}
+        />
+      )}
 
       {generating && (
         <GenerateMapModal

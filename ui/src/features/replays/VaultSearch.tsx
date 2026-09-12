@@ -42,6 +42,16 @@ import "../../design-system/search-panel.css";
 import type { MessageKey } from "../../i18n";
 import { useTranslation } from "../../i18n/useTranslation";
 
+/**
+ * What counts as a game too short to be worth watching.
+ *
+ * Five minutes rather than one: a game that ended in the first minute is a
+ * lobby somebody left, and one that ended in the fourth is a rush that went
+ * wrong, which is a game. The thread suggested both numbers; this is the one
+ * that removes the noise without removing content.
+ */
+const SHORT_GAME_MINUTES = 5;
+
 const MIN_RATING = -1000;
 const MAX_RATING = 4000;
 
@@ -344,6 +354,32 @@ export function VaultSearch({ featuredMods, leagues, self, initialQuery, onSearc
           }}
         >
           {t("replays.search.exactPlayer")}
+        </Button>
+        {/* A duration floor has always been in the advanced panel as half of a
+            range. The ask was for the one value anybody sets it to: a search
+            for a map comes back full of lobbies that were abandoned in the
+            first minute, and nobody wants to watch those. The panel still has
+            the precise range; this is the press that answers the question.
+
+            Unticking clears the floor rather than restoring whatever was in
+            the range before, which is the honest reading of a toggle. */}
+        <Button
+          type="button"
+          className={form.minDurationMinutes === SHORT_GAME_MINUTES ? "active" : ""}
+          aria-pressed={form.minDurationMinutes === SHORT_GAME_MINUTES}
+          title={t("replays.search.hideShortHint", { minutes: SHORT_GAME_MINUTES })}
+          onClick={() => {
+            const on = form.minDurationMinutes !== SHORT_GAME_MINUTES;
+            const query = {
+              ...form,
+              minDurationMinutes: on ? SHORT_GAME_MINUTES : null,
+              page: 1,
+            };
+            setForm(query);
+            onSearch(query);
+          }}
+        >
+          {t("replays.search.hideShort")}
         </Button>
         <span className="spacer" />
         <button

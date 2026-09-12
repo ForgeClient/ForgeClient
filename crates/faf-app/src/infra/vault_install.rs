@@ -115,6 +115,84 @@ pub async fn bounded_body_with_progress(
     Ok(body)
 }
 
+/// A downloaded archive held on disk, deleted when it goes out of scope.
+///
+/// Not `tempfile::NamedTempFile`: the install path has to open the same file
+/// twice by name, which that type deliberately makes awkward, and the only
+/// thing wanted here is "a path that cleans itself up".
+pub struct DownloadedArchive {
+    path: PathBuf,
+}
+
+impl DownloadedArchive {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for DownloadedArchive {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// [`bounded_body_with_progress`], writing to a temporary file instead of
+/// growing a `Vec`.
+///
+/// Same bounds, same progress callback, same refusal of a response that
+/// declares or delivers more than `max_bytes`. The difference is where the
+/// bytes live: a 512 MiB map no longer needs 512 MiB of heap to be unpacked
+/// from, and the file is removed when the returned handle is dropped, whether
+/// the install succeeded or not.
+pub async fn bounded_body_to_file(
+    response: reqwest::Response,
+    subject: &str,
+    max_bytes: u64,
+    on_bytes: &(dyn Fn(u64, Option<u64>) + Sync),
+) -> Result<DownloadedArchive, String> {
+    let declared = response.content_length();
+    if declared.is_some_and(|size| size > max_bytes) {
+        return Err(format!(
+            "{subject} is larger than the allowed download size"
+        ));
+    }
+
+    let directory = std::env::temp_dir().join(crate::infra::APP_SLUG);
+    tokio::fs::create_dir_all(&directory)
+        .await
+        .map_err(|error| format!("could not create a download folder: {error}"))?;
+    let path = directory.join(format!(".faf-download-{:016x}", rand::random::<u64>()));
+    // Constructed before the first write, so an error partway through still
+    // takes the partial file with it.
+    let archive = DownloadedArchive { path: path.clone() };
+
+    let mut file = tokio::fs::File::create(&path)
+        .await
+        .map_err(|error| format!("could not open a download file: {error}"))?;
+    let mut received = 0_u64;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| format!("could not read {subject}: {error}"))?;
+        received = received
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| format!("{subject} is too large"))?;
+        if received > max_bytes {
+            return Err(format!(
+                "{subject} is larger than the allowed download size"
+            ));
+        }
+        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+            .await
+            .map_err(|error| format!("could not save {subject}: {error}"))?;
+        on_bytes(received, declared);
+    }
+    tokio::io::AsyncWriteExt::flush(&mut file)
+        .await
+        .map_err(|error| format!("could not save {subject}: {error}"))?;
+    drop(file);
+    Ok(archive)
+}
+
 /// The single top-level folder a vault archive installs into, without
 /// extracting anything.
 ///
@@ -123,7 +201,7 @@ pub async fn bounded_body_with_progress(
 /// mod is already installed, and it must be able to stop and ask rather than
 /// find out halfway through an extraction.
 pub fn archive_root_name(bytes: &[u8]) -> Result<String, String> {
-    let root = inspect_archive(bytes, None)?;
+    let root = inspect_archive(std::io::Cursor::new(bytes), None)?;
     // A name we cannot represent is a name we cannot safely compare against
     // what is on disk either, so it is rejected rather than lossily converted.
     root.into_string()
@@ -142,7 +220,55 @@ pub fn install_archive<F>(
 where
     F: FnOnce(&Path) -> Result<(), String>,
 {
-    let root_name = inspect_archive(bytes, expected_root)?;
+    install_archive_from(
+        || Ok(std::io::Cursor::new(bytes)),
+        destination,
+        expected_root,
+        validate_contents,
+    )
+}
+
+/// [`install_archive`], reading the archive off disk rather than out of a
+/// `Vec`.
+///
+/// A map can be half a gigabyte, and holding all of it in the heap to hand a
+/// slice to a zip reader that only ever seeks around it is a cost with nothing
+/// to show for it. The download streams into a temporary file and this opens
+/// that file twice: once to inspect the shape, once to extract. Every bound the
+/// in-memory path enforces is enforced here, because it is the same code.
+pub fn install_archive_from_file<F>(
+    archive: &Path,
+    destination: &Path,
+    expected_root: Option<&str>,
+    validate_contents: F,
+) -> Result<PathBuf, String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
+    install_archive_from(
+        || {
+            std::fs::File::open(archive)
+                .map_err(|error| format!("could not read the downloaded archive: {error}"))
+        },
+        destination,
+        expected_root,
+        validate_contents,
+    )
+}
+
+/// The shared body. `open` is called twice, once per pass over the archive.
+fn install_archive_from<R, O, F>(
+    open: O,
+    destination: &Path,
+    expected_root: Option<&str>,
+    validate_contents: F,
+) -> Result<PathBuf, String>
+where
+    R: std::io::Read + std::io::Seek,
+    O: Fn() -> Result<R, String>,
+    F: FnOnce(&Path) -> Result<(), String>,
+{
+    let root_name = inspect_archive(open()?, expected_root)?;
     std::fs::create_dir_all(destination)
         .map_err(|error| format!("could not create {}: {error}", destination.display()))?;
 
@@ -155,7 +281,7 @@ where
     std::fs::create_dir(&staging)
         .map_err(|error| format!("could not create install staging folder: {error}"))?;
     let outcome = (|| {
-        extract_archive(bytes, &staging, "vault archive")?;
+        extract_archive(open()?, &staging, "vault archive")?;
         let staged_root = staging.join(&root_name);
         validate_contents(&staged_root)?;
         std::fs::rename(&staged_root, &target).map_err(|error| {
@@ -187,7 +313,26 @@ pub fn install_flat_archive<F>(
 where
     F: FnOnce(&Path) -> Result<(), String>,
 {
-    inspect_flat_archive(bytes, subject)?;
+    install_flat_archive_from(
+        || Ok(std::io::Cursor::new(bytes)),
+        target,
+        subject,
+        validate_contents,
+    )
+}
+
+fn install_flat_archive_from<R, O, F>(
+    open: O,
+    target: &Path,
+    subject: &str,
+    validate_contents: F,
+) -> Result<(), String>
+where
+    R: std::io::Read + std::io::Seek,
+    O: Fn() -> Result<R, String>,
+    F: FnOnce(&Path) -> Result<(), String>,
+{
+    inspect_flat_archive(open()?, subject)?;
 
     let parent = target
         .parent()
@@ -203,7 +348,7 @@ where
     std::fs::create_dir(&staging)
         .map_err(|error| format!("could not create install staging folder: {error}"))?;
     let outcome = (|| {
-        extract_archive(bytes, &staging, subject)?;
+        extract_archive(open()?, &staging, subject)?;
         validate_contents(&staging)?;
         std::fs::rename(&staging, target)
             .map_err(|error| format!("could not finish installing {}: {error}", target.display()))
@@ -260,8 +405,11 @@ fn check_entry(
 
 /// Validate an archive whose entries sit at the top level, with no wrapping
 /// folder. The caller owns the destination directory name.
-fn inspect_flat_archive(bytes: &[u8], subject: &str) -> Result<(), String> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+fn inspect_flat_archive<R: std::io::Read + std::io::Seek>(
+    reader: R,
+    subject: &str,
+) -> Result<(), String> {
+    let mut archive = zip::ZipArchive::new(reader)
         .map_err(|error| format!("not a valid zip archive: {error}"))?;
     check_archive_shape(archive.len(), subject)?;
 
@@ -281,9 +429,12 @@ fn inspect_flat_archive(bytes: &[u8], subject: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn inspect_archive(bytes: &[u8], expected_root: Option<&str>) -> Result<OsString, String> {
+fn inspect_archive<R: std::io::Read + std::io::Seek>(
+    reader: R,
+    expected_root: Option<&str>,
+) -> Result<OsString, String> {
     const SUBJECT: &str = "vault archive";
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+    let mut archive = zip::ZipArchive::new(reader)
         .map_err(|error| format!("not a valid zip archive: {error}"))?;
     check_archive_shape(archive.len(), SUBJECT)?;
 
@@ -328,9 +479,56 @@ fn inspect_archive(bytes: &[u8], expected_root: Option<&str>) -> Result<OsString
     Ok(root)
 }
 
-fn extract_archive(bytes: &[u8], destination: &Path, subject: &str) -> Result<(), String> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+/// Unpack one entry, refusing an archive that decompresses to more than its
+/// own header said it would.
+///
+/// [`check_entry`] bounds the *declared* sizes, and a header is written by
+/// whoever built the archive. `zip`'s reader caps the compressed stream and
+/// puts no ceiling at all on the decompressed output, so copying to EOF wrote
+/// whatever the stream produced: a 65 kB archive declaring ten bytes an entry
+/// really does write 64 MB an entry, and the vault is content anybody can
+/// upload. Hosting a game on such a map would have every player who joined
+/// download it and fill their disk.
+///
+/// Reading one byte past the declared size is what turns that number from a
+/// claim into a limit: if the reader can still produce it, the header lied,
+/// and nothing beyond the limit has been written yet.
+///
+/// `remaining` is the running budget across the whole archive, so a thousand
+/// honestly-declared entries cannot add up past the ceiling either.
+fn extract_entry(
+    entry: &mut impl std::io::Read,
+    declared: u64,
+    output: &Path,
+    remaining: &mut u64,
+    subject: &str,
+) -> Result<(), String> {
+    use std::io::Read as _;
+
+    let allowed = declared.min(*remaining);
+    let mut file = std::fs::File::create(output)
+        .map_err(|error| format!("could not create {}: {error}", output.display()))?;
+    let written = std::io::copy(&mut entry.take(allowed.saturating_add(1)), &mut file)
+        .map_err(|error| format!("could not write {}: {error}", output.display()))?;
+    if written > allowed {
+        return Err(format!(
+            "{subject} contains an entry bigger than the size it declares"
+        ));
+    }
+    *remaining -= written;
+    file.flush()
+        .map_err(|error| format!("could not finish {}: {error}", output.display()))?;
+    Ok(())
+}
+
+fn extract_archive<R: std::io::Read + std::io::Seek>(
+    reader: R,
+    destination: &Path,
+    subject: &str,
+) -> Result<(), String> {
+    let mut archive = zip::ZipArchive::new(reader)
         .map_err(|error| format!("not a valid zip archive: {error}"))?;
+    let mut remaining = MAX_EXPANDED_BYTES;
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -348,12 +546,8 @@ fn extract_archive(bytes: &[u8], destination: &Path, subject: &str) -> Result<()
             std::fs::create_dir_all(parent)
                 .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
         }
-        let mut file = std::fs::File::create(&output)
-            .map_err(|error| format!("could not create {}: {error}", output.display()))?;
-        std::io::copy(&mut entry, &mut file)
-            .map_err(|error| format!("could not write {}: {error}", output.display()))?;
-        file.flush()
-            .map_err(|error| format!("could not finish {}: {error}", output.display()))?;
+        let declared = entry.size();
+        extract_entry(&mut entry, declared, &output, &mut remaining, subject)?;
     }
     Ok(())
 }
@@ -361,6 +555,147 @@ fn extract_archive(bytes: &[u8], destination: &Path, subject: &str) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    /// An archive whose headers understate an entry, byte for byte the shape
+    /// the review demonstrated: the declared size is patched in both the local
+    /// header and the central directory, while the compressed stream still
+    /// holds the real payload.
+    ///
+    /// `zip` caps the compressed side and not the decompressed side, so before
+    /// the bound in [`extract_entry`] this wrote the whole payload and
+    /// `check_entry` booked it as ten bytes.
+    fn zip_that_lies_about_its_size(name: &str, payload: &[u8], declared: u32) -> Vec<u8> {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut bytes);
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(payload).unwrap();
+            writer.finish().unwrap();
+        }
+        let mut bytes = bytes.into_inner();
+
+        // Uncompressed size sits at +22 in a local file header and at +24 in a
+        // central directory record.
+        for (signature, offset) in [(b"PK\x03\x04", 22_usize), (b"PK\x01\x02", 24_usize)] {
+            let at = bytes
+                .windows(4)
+                .position(|window| window == signature.as_slice())
+                .expect("the writer emits both records");
+            bytes[at + offset..at + offset + 4].copy_from_slice(&declared.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn an_archive_that_understates_an_entry_is_refused_rather_than_written() {
+        let payload = vec![0_u8; 4 * 1024 * 1024];
+        let bytes = zip_that_lies_about_its_size("bomb.v0001/heightmap.raw", &payload, 10);
+
+        let root = std::env::temp_dir().join(format!("faf-zip-bomb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let outcome = install_archive(&bytes, &root, None, |_| Ok(()));
+        let error = outcome.expect_err("an archive that lies about its size must not install");
+        assert!(
+            error.contains("bigger than the size it declares"),
+            "unexpected error: {error}"
+        );
+
+        // Staging is removed either way, so nothing of the payload survives.
+        let leftovers: Vec<_> = std::fs::read_dir(&root)
+            .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+            .unwrap_or_default();
+        assert!(leftovers.is_empty(), "left behind {leftovers:?}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn nothing_past_the_declared_size_is_ever_written_to_disk() {
+        // The refusal above proves the archive is rejected. This proves the
+        // rejection happens *before* the payload lands: the old code wrote
+        // every byte the decompressor produced and only then had anything to
+        // compare, which on a real bomb is gigabytes onto the user's disk.
+        let payload = vec![0_u8; 4 * 1024 * 1024];
+        let output = std::env::temp_dir().join(format!("faf-zip-bound-{}", std::process::id()));
+        let _ = std::fs::remove_file(&output);
+
+        let mut remaining = MAX_EXPANDED_BYTES;
+        let error = extract_entry(
+            &mut payload.as_slice(),
+            10,
+            &output,
+            &mut remaining,
+            "test archive",
+        )
+        .expect_err("a reader that outruns its declared size is refused");
+        assert!(
+            error.contains("bigger than the size it declares"),
+            "{error}"
+        );
+
+        let written = std::fs::metadata(&output)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        assert!(written <= 11, "wrote {written} bytes for a 10 byte entry");
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn the_budget_is_shared_across_every_entry() {
+        // A thousand honestly-declared entries must not add up past the
+        // ceiling either, which is what the running total is for.
+        let output = std::env::temp_dir().join(format!("faf-zip-budget-{}", std::process::id()));
+        let _ = std::fs::remove_file(&output);
+
+        let mut remaining = 4_u64;
+        extract_entry(
+            &mut b"abcd".as_slice(),
+            4,
+            &output,
+            &mut remaining,
+            "test archive",
+        )
+        .expect("the first entry fits exactly");
+        assert_eq!(remaining, 0, "the budget is spent by what was written");
+
+        let error = extract_entry(
+            &mut b"e".as_slice(),
+            1,
+            &output,
+            &mut remaining,
+            "test archive",
+        )
+        .expect_err("nothing fits once the budget is gone");
+        assert!(
+            error.contains("bigger than the size it declares"),
+            "{error}"
+        );
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn an_honest_archive_still_installs() {
+        // The other half of the bound: a truthful header must not be refused
+        // by the extra byte the check reads.
+        let root = std::env::temp_dir().join(format!("faf-zip-honest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let bytes = zip(&[("honest.v0001/scenario.lua", b"-- a map")]);
+        let installed = install_archive(&bytes, &root, Some("honest.v0001"), |_| Ok(()))
+            .expect("an ordinary archive installs");
+        assert_eq!(
+            std::fs::read(installed.join("scenario.lua")).unwrap(),
+            b"-- a map"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut bytes = std::io::Cursor::new(Vec::new());
@@ -420,13 +755,13 @@ mod tests {
     fn archive_requires_one_expected_root() {
         let bytes = zip(&[("wanted/file.txt", b"ok")]);
         assert_eq!(
-            inspect_archive(&bytes, Some("wanted")).unwrap(),
+            inspect_archive(Cursor::new(&bytes), Some("wanted")).unwrap(),
             OsString::from("wanted")
         );
-        assert!(inspect_archive(&bytes, Some("other")).is_err());
+        assert!(inspect_archive(Cursor::new(&bytes), Some("other")).is_err());
 
         let multiple = zip(&[("one/a", b"a"), ("two/b", b"b")]);
-        assert!(inspect_archive(&multiple, None).is_err());
+        assert!(inspect_archive(Cursor::new(&multiple), None).is_err());
     }
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -456,14 +791,14 @@ mod tests {
     #[test]
     fn the_vault_installer_still_refuses_what_the_flat_one_accepts() {
         let flat = zip(&[("faf_galactic_war_client.exe", b"binary")]);
-        assert!(inspect_archive(&flat, None).is_err());
-        assert!(inspect_flat_archive(&flat, "archive").is_ok());
+        assert!(inspect_archive(Cursor::new(&flat), None).is_err());
+        assert!(inspect_flat_archive(Cursor::new(&flat), "archive").is_ok());
     }
 
     #[test]
     fn a_flat_archive_cannot_escape_its_directory() {
         let escaping = zip(&[("../escaped.txt", b"nope")]);
-        assert!(inspect_flat_archive(&escaping, "archive").is_err());
+        assert!(inspect_flat_archive(Cursor::new(&escaping), "archive").is_err());
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! keeps the runtime free of any hard dependency on a particular executor.
 
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use faf_domain::{AppCommand, AppEvent, AppState};
 use serde::Serialize;
@@ -139,6 +139,10 @@ pub struct EventSink {
     tx: broadcast::Sender<AppEvent>,
     versioned_tx: broadcast::Sender<VersionedEvent>,
     revision: Arc<AtomicU64>,
+    /// Serialises delivery, so that revision N is on both channels before
+    /// N+1 is handed out. Held by [`EventSink::emit`] across the whole
+    /// operation; never taken by a reader. See the note on `emit`.
+    send_order: Arc<Mutex<()>>,
 }
 
 /// One state delta with the exact authoritative-state revision it produced.
@@ -165,25 +169,38 @@ pub struct VersionedSnapshot {
 impl EventSink {
     /// Reduce an event into the authoritative state and broadcast it.
     ///
-    /// **The write guard is deliberately held across both sends.** It looks
-    /// like an easy win to drop it right after `reduce` so readers are not
-    /// blocked by broadcast work, and that is wrong: revisions are handed out
-    /// under this lock, so releasing it early lets two concurrent emitters
-    /// interleave and deliver revision N+1 before N. The frontend mirror
-    /// (`ui/src/ipc/revisionedMirror.ts`) treats any revision gap as
-    /// corruption and requests a fresh snapshot, and a snapshot is a few
-    /// megabytes: the map vault alone measures ~3.6 MiB of JSON at a
-    /// realistic 5000-entry catalogue. Trading a microsecond of lock hold for
-    /// intermittent multi-megabyte refetches is a bad deal. `broadcast::send`
-    /// does not block on slow receivers, so the hold is bounded anyway.
+    /// Two locks, each held for exactly what it protects.
+    ///
+    /// `send_order` is taken first and held across the whole operation. It is
+    /// what keeps revisions in order: without it two concurrent emitters can
+    /// interleave and deliver N+1 before N, and the frontend mirror
+    /// (`ui/src/ipc/revisionedMirror.ts`) reads any revision gap as corruption
+    /// and asks for a fresh snapshot. A snapshot is a few megabytes: the map
+    /// vault alone measures ~3.6 MiB of JSON at a realistic 5000-entry
+    /// catalogue. No reader ever takes this lock, so holding it costs them
+    /// nothing.
+    ///
+    /// The state write guard is held only across `reduce` and the revision
+    /// bump, which is the shortest window that still leaves the two consistent
+    /// for [`Self::versioned_snapshot`]: a reader must never see state that has
+    /// already absorbed event N while being told the newest revision is N-1,
+    /// or it would apply N a second time. Broadcasting happens after that guard
+    /// is dropped, so a `with_state` reader is no longer blocked behind two
+    /// channel sends. That was the review's point, and this is the version of
+    /// it that does not reorder revisions.
     pub fn emit(&self, event: impl Into<AppEvent>) {
         let event = event.into();
-        let mut guard = self.state.write().expect("app state lock poisoned");
-        faf_domain::reduce(&mut guard, &event);
-        let revision = self
-            .revision
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            .wrapping_add(1);
+        let _delivery = self
+            .send_order
+            .lock()
+            .expect("event delivery lock poisoned");
+        let revision = {
+            let mut guard = self.state.write().expect("app state lock poisoned");
+            faf_domain::reduce(&mut guard, &event);
+            self.revision
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                .wrapping_add(1)
+        };
         // Err only means "no subscribers yet": fine to ignore. The clone is
         // skipped when nobody is listening on the plain stream, because some
         // events carry the whole player directory and this would otherwise
@@ -194,9 +211,15 @@ impl EventSink {
         let _ = self.versioned_tx.send(VersionedEvent { revision, event });
     }
 
-    /// A snapshot of the authoritative state. Lets a service read back the result
-    /// of its own `emit` (e.g. to persist the post-reduce slice). Read-only,
-    /// state still only changes through [`Self::emit`].
+    /// A snapshot of the authoritative state, for a test that wants to read
+    /// the whole thing back after an `emit`.
+    ///
+    /// Not for services: every one of them uses [`Self::with_state`], which
+    /// copies out the one slice it needs instead of cloning a state whose map
+    /// catalogue alone is megabytes. The doc here used to point at "IPC
+    /// hydration boundaries", and that boundary goes through
+    /// `App::versioned_snapshot`, not through the sink.
+    #[cfg(test)]
     pub fn snapshot(&self) -> AppState {
         self.state.read().expect("app state lock poisoned").clone()
     }
@@ -250,15 +273,23 @@ impl App {
     pub fn new(backend_version: impl Into<String>, ports: Ports) -> (Self, AppLoop) {
         let state = Arc::new(RwLock::new(AppState::default()));
         let (event_tx, _) = broadcast::channel::<AppEvent>(256);
-        let (versioned_event_tx, _) = broadcast::channel::<VersionedEvent>(256);
+        // Four times the plain stream's room. A receiver that falls behind on
+        // this one does not merely miss events: the mirror reads a revision
+        // gap as corruption and asks for a whole `AppState` back, which is
+        // megabytes of JSON requested exactly when the client is already
+        // behind. Lag here is self-feeding, so the cheapest thing to spend on
+        // it is queue.
+        let (versioned_event_tx, _) = broadcast::channel::<VersionedEvent>(1024);
         let (cmd_tx, cmd_rx) = mpsc::channel::<QueuedCommand>(64);
         let revision = Arc::new(AtomicU64::new(0));
+        let send_order = Arc::new(Mutex::new(()));
 
         let sink = EventSink {
             state: state.clone(),
             tx: event_tx.clone(),
             versioned_tx: versioned_event_tx.clone(),
             revision: revision.clone(),
+            send_order: send_order.clone(),
         };
         let ctx = ServiceCtx {
             backend_version: backend_version.into(),
@@ -375,8 +406,13 @@ impl App {
 
     /// Atomically subscribe at the event-stream tail and clone the state at
     /// that exact boundary. Events represented by the snapshot precede the
-    /// receiver; every later event is queued for it. This lets IPC recover from
-    /// broadcast lag without dropping or replaying state transitions.
+    /// receiver; every later event is queued for it.
+    ///
+    /// The unversioned twin of [`Self::subscribe_versioned_with_snapshot`],
+    /// which is what the shell uses: without a revision the frontend cannot
+    /// tell a gap from a quiet moment, so this is kept for the tests that
+    /// exercise the subscribe-and-snapshot boundary itself.
+    #[cfg(test)]
     pub fn subscribe_with_snapshot(&self) -> (broadcast::Receiver<AppEvent>, AppState) {
         let guard = self.state.read().expect("app state lock poisoned");
         let events = self.event_tx.subscribe();
@@ -413,6 +449,20 @@ impl App {
     pub fn snapshot(&self) -> AppState {
         self.state.read().expect("app state lock poisoned").clone()
     }
+
+    /// Read one projection of the state without cloning the rest of it.
+    ///
+    /// The twin of [`EventSink::with_state`], for the shell. Closing the
+    /// window used to clone the whole `AppState` to read a single enum out of
+    /// `lobby.join`: a few megabytes at a realistic catalogue size, to answer
+    /// "is a game running".
+    ///
+    /// The closure runs under the read lock, so it must copy out what it needs
+    /// and must not block or do IO.
+    pub fn with_state<T>(&self, read: impl FnOnce(&AppState) -> T) -> T {
+        let state = self.state.read().expect("app state lock poisoned");
+        read(&state)
+    }
 }
 
 impl AppLoop {
@@ -442,10 +492,29 @@ impl AppLoop {
         // build whose Twitch credentials are absent, which is most of them.
         services::streams::spawn(ctx.clone(), self.sink.clone());
 
+        // A ceiling on service tasks running at once.
+        //
+        // The command queue bounds how many are *waiting*, not how many are
+        // running: every command that arrives is spawned immediately, so a
+        // render loop in the UI that dispatches on every frame would start an
+        // unbounded number of concurrent network requests. A few services hold
+        // their own single-flight guards; most do not, and a ceiling here
+        // means none of them has to.
+        //
+        // Wide enough that nothing a person does reaches it: a busy session is
+        // a handful of concurrent commands, and a permit is held only for the
+        // duration of one service call.
+        let permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_COMMANDS));
+
         while let Some(queued) = self.cmd_rx.recv().await {
             let ctx = ctx.clone();
             let sink = self.sink.clone();
+            let permits = permits.clone();
             tokio::spawn(async move {
+                // Acquired inside the task, so the loop keeps draining the
+                // queue while services are busy: the waiting happens here, not
+                // in front of the channel.
+                let _permit = permits.acquire_owned().await;
                 dispatch(queued.command, &ctx, &sink).await;
                 if let Some(completion) = queued.completion {
                     let _ = completion.send(());
@@ -454,6 +523,10 @@ impl AppLoop {
         }
     }
 }
+
+/// See [`AppLoop::run`]. Not a tuning knob: it exists so a runaway dispatcher
+/// cannot open a thousand sockets, and is far above any honest workload.
+const MAX_CONCURRENT_COMMANDS: usize = 64;
 
 /// Route a command to the owning service. One arm per slice (ARCHITECTURE.md §8).
 async fn dispatch(cmd: AppCommand, ctx: &ServiceCtx, sink: &EventSink) {

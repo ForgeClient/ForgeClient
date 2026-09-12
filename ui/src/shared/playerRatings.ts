@@ -21,7 +21,7 @@
 // leaderboard has a rating, which may be 0 or below. A player with no entry
 // has none, and that is the only N/A.
 
-import type { PlayerLobbyRating, PlayerProfile } from "../ipc/bindings";
+import type { Game, PlayerLobbyRating, PlayerProfile } from "../ipc/bindings";
 import { t } from "../i18n";
 
 /** The leaderboard a custom game is rated on, and the server's default. */
@@ -111,4 +111,26 @@ export function averageRating(ratings: Array<number | null>): number | null {
   // lineup averaging -5 over two players is -2 in both rather than -2 here and
   // -3 there. Ratings do go below zero; see the note at the top of this file.
   return Math.trunc(known.reduce((total, rating) => total + rating, 0) / known.length);
+}
+
+/**
+ * Whether a host's enforced rating range shuts this player out of `game`.
+ *
+ * The mirror of `faf_domain::state::rating_gate_blocks`, and of the lobby
+ * server's own `Game.is_visible_to_player`. The range alone means nothing:
+ * only `enforceRatingRange` makes the server act on it, which is why a lobby
+ * advertising a range used to admit everybody.
+ *
+ * An unknown rating never blocks. The server knows every player's rating on
+ * every board and this client only knows the ones it has been told about, so
+ * guessing here would lock somebody out of a lobby they belong in.
+ */
+export function ratingGateBlocks(game: Game, playerRating: number | null): boolean {
+  if (!game.enforceRatingRange || playerRating === null) return false;
+  // Inclusive at both ends, like the server's `InclusiveRange`, and an absent
+  // bound is no bound.
+  return (
+    (game.ratingMin !== null && playerRating < game.ratingMin)
+    || (game.ratingMax !== null && playerRating > game.ratingMax)
+  );
 }

@@ -21,10 +21,21 @@ interface Props {
   playerId: number;
 }
 
-/** Win rate in whole percent, or `null` when nothing has been decided. */
+/**
+ * Win rate in whole percent, or `null` when nothing has been decided.
+ *
+ * Draws are left out of the denominator rather than counted as half a loss,
+ * which is what faftracker.xyz does and therefore what the number players
+ * compare this against means.
+ */
 function winRate(wins: number, losses: number): number | null {
   const decided = wins + losses;
   return decided > 0 ? Math.round((wins / decided) * 100) : null;
+}
+
+/** The record cell: wins, losses, and the draws the rate leaves out. */
+function record(wins: number, losses: number, draws: number): string {
+  return `${formatNumber(wins)} / ${formatNumber(losses)} / ${formatNumber(draws)}`;
 }
 
 type SortColumn = "map" | "games" | "record" | "winRate" | "lastPlayed";
@@ -162,7 +173,7 @@ export function PlayerMapStatistics({ playerId }: Props) {
         </div>
         <div className="player-maps-figure">
           <span className="player-maps-value">
-            {formatNumber(stats.wins)} / {formatNumber(stats.losses)}
+            {record(stats.wins, stats.losses, stats.undecided)}
           </span>
           <span className="player-maps-label">{t("playerCard.maps.record")}</span>
         </div>
@@ -176,6 +187,15 @@ export function PlayerMapStatistics({ playerId }: Props) {
           history, and a reader comparing them to the profile deserves to know. */}
       {stats.truncated && (
         <p className="player-maps-note muted">{t("playerCard.maps.truncated")}</p>
+      )}
+
+      {/* Same reason. The record counts only games that moved a rating, so a
+          player whose history is mostly unranked lobbies sees a small W/L
+          beside a large game count, and is owed the arithmetic. */}
+      {stats.unranked > 0 && (
+        <p className="player-maps-note muted">
+          {t("playerCard.maps.unrankedNote", { count: stats.unranked })}
+        </p>
       )}
 
 
@@ -230,9 +250,7 @@ export function PlayerMapStatistics({ playerId }: Props) {
                   </span>
                 </td>
                 <td>{formatNumber(entry.games)}</td>
-                <td>
-                  {formatNumber(entry.wins)} / {formatNumber(entry.losses)}
-                </td>
+                <td>{record(entry.wins, entry.losses, entry.draws)}</td>
                 <td>{rate === null ? "–" : `${rate}%`}</td>
                 <td>{entry.lastPlayed ? formatDateTime(entry.lastPlayed) : "–"}</td>
               </tr>

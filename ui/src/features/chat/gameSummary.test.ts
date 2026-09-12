@@ -20,6 +20,7 @@ const game = (id: number, host: string, teams: Record<string, string[]>): Game =
   hostedAt: null,
   ratingMin: null,
   ratingMax: null,
+  enforceRatingRange: false,
   teams,
   simMods: {},
 });

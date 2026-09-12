@@ -1,0 +1,47 @@
+/* The grab bar for a resizable column or panel.
+
+   Invisible until it is wanted. A divider drawn at rest turns every list into
+   a spreadsheet, and the borders these sit on are already doing the drawing;
+   what the handle adds is a target, a cursor and a colour on hover. */
+
+.resize-handle {
+  position: relative;
+  display: block;
+  align-self: stretch;
+  touch-action: none;
+  background: transparent;
+  transition: background-color var(--transition-fast);
+}
+
+.resize-handle.is-vertical {
+  cursor: col-resize;
+}
+
+.resize-handle.is-horizontal {
+  cursor: row-resize;
+}
+
+.resize-handle:hover,
+.resize-handle:focus-visible {
+  background: color-mix(in srgb, var(--color-accent) 55%, transparent);
+}
+
+.resize-handle:focus-visible {
+  outline: none;
+}
+
+/* The line it draws while being dragged or reached for, centred in whatever
+   width the caller gave the target so a wide grab area still reads as thin. */
+.resize-handle.is-vertical::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: transparent;
+}
+
+.resize-handle.is-vertical:hover::after {
+  background: var(--color-accent);
+}

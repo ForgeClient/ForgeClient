@@ -48,8 +48,12 @@
   flex-direction: column;
   width: min(1360px, calc(100vw - 32px));
   max-width: 1360px;
-  height: min(85vh, 800px);
-  max-height: 85vh;
+  /* 800px was a cap, not a fit: the description field, the map list and the
+     mod list all had to share what was left after the header, so a window with
+     room to spare still scrolled. The dialog now takes the height it is given
+     and stops 12px short of the edge, which is what the replay card does. */
+  height: min(94vh, 1000px);
+  max-height: calc(100vh - 24px);
   overflow: hidden;
   box-sizing: border-box;
 }
@@ -336,8 +340,17 @@
 
 .host-rating-option {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+/* Its own line under the checkbox and the bounds, which is where a sentence
+   explaining both of them belongs. */
+.host-field-hint {
+  flex-basis: 100%;
+  font-size: 11px;
+  line-height: 1.3;
 }
 
 .host-rating-inputs {
@@ -355,6 +368,19 @@
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   font-size: 12px;
+  /* No browser spinner. It is two arrows the client did not draw, in a style
+     the client does not use, and they take a third of a 58px field to step by
+     one. Typing and the arrow keys both still work; `NumberInput` clamps the
+     value either way. */
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.number-input::-webkit-outer-spin-button,
+.number-input::-webkit-inner-spin-button {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .compact-input:disabled,
@@ -384,10 +410,23 @@
 }
 
 /* 4-Column Grid Layout (Game Type | Mods | Map | Preview)
-   Column 1 accommodates mode icons; the other three are adjusted slightly. */
+   Column 1 accommodates mode icons; the other three are adjusted slightly.
+ 
+   Each column may shrink to a floor rather than holding a fixed width. Fixed
+   widths needed 1186px inside the dialog, and the two-row fallback below only
+   starts at a 960px viewport: between the two the grid overflowed a dialog that
+   clips, so a window in that range lost the right-hand column rather than
+   rearranging. The floors bring four columns down to 956px, which is narrower
+   than the point at which they are given up. At full width the maxima are the
+   designed sizes, so nothing changes on a screen that was already wide
+   enough. */
 .host-game-grid {
   display: grid;
-  grid-template-columns: 245px 335px minmax(260px, 1fr) 310px;
+  grid-template-columns:
+    minmax(200px, 245px)
+    minmax(260px, 335px)
+    minmax(220px, 1fr)
+    minmax(240px, 310px);
   gap: 12px;
   flex: 1 1 auto;
   min-height: 0;
@@ -557,34 +596,19 @@
 }
 
 /* Column 2: Mods */
+/* Mirrors `.host-map-tabs`: both are `section-tabs`, and the only thing either
+   adds is that its two buttons split the width. */
 .host-mod-tabs {
-  display: flex;
-  gap: 2px;
   flex-shrink: 0;
-  background: var(--color-bg);
-  padding: 2px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
+  margin: 0;
 }
 
-.host-mod-tab {
+.host-mod-tabs button {
   flex: 1;
-  height: 24px;
-  font-size: 11px;
-  font-weight: 550;
-  color: var(--color-muted);
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  text-align: center;
-  transition: all 120ms ease;
-}
-
-.host-mod-tab.active {
-  color: var(--color-text);
-  background: var(--color-surface-raised);
-  box-shadow: var(--shadow-sm);
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .host-column-search {
@@ -604,10 +628,13 @@
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
+  /* Carried by every row, transparent until the mod is on, so switching one on
+     colours it instead of moving the text three pixels sideways. */
+  border-left: 3px solid transparent;
   border-bottom: 1px solid var(--color-border);
   font-size: 11px;
   cursor: pointer;
-  transition: background-color 120ms ease;
+  transition: background-color 120ms ease, border-left-color 120ms ease;
 }
 
 .host-mod-row:last-child {
@@ -618,8 +645,22 @@
   background: var(--color-surface-hover);
 }
 
+/* The same green edge and tint the mod vault gives a mod that is switched on,
+   so the state looks the same wherever a mod is drawn. It used to be a slightly
+   different grey, which left the checkbox tick as the only thing separating an
+   active row from an inactive one. */
 .host-mod-row.is-active {
-  background: var(--color-surface);
+  background: color-mix(in srgb, var(--color-ok) 7%, var(--color-surface));
+  border-left-color: var(--color-ok);
+}
+
+.host-mod-row.is-active:hover {
+  background: color-mix(in srgb, var(--color-ok) 13%, var(--color-surface));
+}
+
+.host-mod-row.is-active .host-mod-name {
+  color: var(--color-text);
+  font-weight: 600;
 }
 
 .host-mod-name {
@@ -826,25 +867,61 @@
   color: var(--color-muted);
 }
 
-.host-preview-overlay {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  padding: 8px 10px;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+/* The name, under the picture rather than dimming the corner of it. */
+.host-preview-name {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 6px 6px 0;
 }
 
-.host-preview-title {
+.host-preview-name > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
   font-size: 13px;
   font-weight: 650;
-  color: var(--color-text);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Far from the map list on purpose: this deletes a folder off the disk, and
+   the rows it would sit beside are clicked through a few hundred at a time. */
+.host-map-delete {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 4px 8px;
+  color: var(--color-error);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--color-error) 35%, transparent);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.host-map-delete:hover {
+  background: color-mix(in srgb, var(--color-error) 14%, transparent);
+  border-color: var(--color-error);
+}
+
+/* The ranked choice in the map filter popover, above the reset. */
+.host-map-filter-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.host-map-filter-choice-label {
+  color: var(--color-subtle);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
 }
 
 .host-map-info-section {
@@ -1035,7 +1112,9 @@
 .password-dialog p { margin: 5px auto 16px; max-width: 400px; color: var(--color-muted); font-size: 11px; }
 .password-dialog > input { width: min(100%, 360px); }
 
-@media (max-width: 960px) {
+/* Where shrinking genuinely runs out: below this the four floors plus the gaps
+   no longer fit, so two rows are the honest answer rather than a clipped one. */
+@media (max-width: 1010px) {
   .host-game-grid {
     grid-template-columns: 1fr 1fr;
     height: auto;
@@ -1210,6 +1289,8 @@
   text-align: center;
 }
 
+/* Prefixed with a `v` in the markup: on its own the number read as a count of
+   something rather than as the mod's version. */
 .host-mod-version {
   flex: none;
   font-size: 11px;

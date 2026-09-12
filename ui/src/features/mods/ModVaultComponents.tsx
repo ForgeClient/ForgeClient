@@ -212,7 +212,9 @@ export function ModCard({
         {onToggleFavorite && (
           <Button
             className={favorite ? "mod-favorite-button active" : "mod-favorite-button"}
-            aria-label={favorite ? `Remove ${mod.displayName} from favorites` : `Add ${mod.displayName} to favorites`}
+            aria-label={t(favorite ? "mods.vault.removeFavoriteAria" : "mods.vault.addFavoriteAria", {
+              name: mod.displayName,
+            })}
             aria-pressed={favorite}
             title={t(favorite ? "mods.vault.removeFavorite" : "mods.vault.addFavorite")}
             onClick={onToggleFavorite}

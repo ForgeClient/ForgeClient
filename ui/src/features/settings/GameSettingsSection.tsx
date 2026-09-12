@@ -2,10 +2,15 @@ import { useEffect, useState } from "react";
 import type { GamePreferences } from "../../ipc/bindings";
 import { ipc } from "../../ipc/client";
 import { Button } from "../../design-system/Button";
+import { NumberInput } from "../../design-system/NumberInput";
 import { useAppStore } from "../../store/store";
 import { useTranslation } from "../../i18n/useTranslation";
 import { SettingRow, SettingsSwitch } from "./SettingControls";
 import { gameNeedsALaunchWrapper } from "../../shared/platform";
+
+/// Mirrors `faf_domain::state::settings::MAX_KEPT_GENERATED_MAPS`, so the
+/// input never offers a number the backend would quietly clamp.
+const MAX_KEPT_GENERATED_MAPS = 500;
 
 const save = (preferences: GamePreferences) =>
   ipc.send({ kind: "Settings", command: { type: "setGame", payload: { preferences } } });
@@ -51,6 +56,13 @@ export function GameSettingsSection() {
     void save({ ...preferences, keepGeneratedMaps });
   };
 
+  const setKeepGeneratedMapsLimit = (keepGeneratedMapsLimit: number) => {
+    void save({
+      ...preferences,
+      keepGeneratedMapsLimit: Math.max(0, Math.min(MAX_KEPT_GENERATED_MAPS, keepGeneratedMapsLimit)),
+    });
+  };
+
   return (
     <>
       {/* First, because it is the one switch here that changes what a
@@ -87,11 +99,27 @@ export function GameSettingsSection() {
         label={t("settings.game.keepGeneratedMaps")}
         hint={t("settings.game.keepGeneratedMapsHint")}
       >
-        <SettingsSwitch
-          checked={preferences.keepGeneratedMaps ?? false}
-          onChange={setKeepGeneratedMaps}
-          label={t("settings.game.keepGeneratedMaps")}
-        />
+        <div className="settings-inline-pair">
+          <SettingsSwitch
+            checked={preferences.keepGeneratedMaps ?? false}
+            onChange={setKeepGeneratedMaps}
+            label={t("settings.game.keepGeneratedMaps")}
+          />
+          {/* How many, next to whether. Keeping everything is what filled a
+              system drive in the thread that asked for this, and keeping
+              nothing is already the switch beside it; zero means no limit
+              because that is the old behaviour and it stays reachable. */}
+          <NumberInput
+            className="number-input"
+            value={preferences.keepGeneratedMapsLimit ?? 0}
+            min={0}
+            max={MAX_KEPT_GENERATED_MAPS}
+            disabled={!(preferences.keepGeneratedMaps ?? false)}
+            aria-label={t("settings.game.keepGeneratedMapsLimit")}
+            title={t("settings.game.keepGeneratedMapsLimitHint")}
+            onChange={setKeepGeneratedMapsLimit}
+          />
+        </div>
       </SettingRow>
 
       <SettingRow

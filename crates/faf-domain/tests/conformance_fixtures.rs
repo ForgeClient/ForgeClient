@@ -2573,7 +2573,10 @@ fn helper_fixture() -> HelperFixture {
     ];
     let statuses = vec![
         UploadStatus::Idle,
-        UploadStatus::Compressing,
+        UploadStatus::Compressing {
+            done_bytes: 3,
+            total_bytes: 10,
+        },
         UploadStatus::Uploading {
             sent_bytes: 5,
             total_bytes: 10,
@@ -2918,6 +2921,7 @@ fn cases() -> Vec<Case> {
                         wins: 2,
                         losses: 1,
                         undecided: 0,
+                        unranked: 0,
                         unattributed: 0,
                         maps: vec![PlayerMapStat {
                             map: "Setons Clutch".into(),
@@ -2925,6 +2929,7 @@ fn cases() -> Vec<Case> {
                             games: 3,
                             wins: 2,
                             losses: 1,
+                            draws: 0,
                             last_played: "2026-01-04T20:00:00Z".into(),
                         }],
                         truncated: false,
@@ -3767,9 +3772,19 @@ fn cases() -> Vec<Case> {
                     },
                 }
                 .into(),
+                // The picture arrives after the dialog is already open, and a
+                // later `Opened` clears it again: both halves are worth
+                // replaying through the twins.
+                UploadsEvent::PreviewRead {
+                    data_url: "data:image/png;base64,iVBORw0KGgo=".into(),
+                }
+                .into(),
                 UploadsEvent::RankedChanged { ranked: true }.into(),
                 UploadsEvent::Progressed {
-                    status: UploadStatus::Compressing,
+                    status: UploadStatus::Compressing {
+                        done_bytes: 3,
+                        total_bytes: 10,
+                    },
                 }
                 .into(),
                 UploadsEvent::Closed.into(),
@@ -5215,6 +5230,8 @@ fn cases() -> Vec<Case> {
                                     value: "NOISY".into(),
                                 },
                             ],
+                            column_widths: vec![320, 180, 90, 110, 80],
+                            detail_width: 360,
                         },
                         matchmaker_unselected_queues: vec![
                             "  ladder_1v1 ".into(),
@@ -5258,6 +5275,12 @@ fn cases() -> Vec<Case> {
                         favorite_maps: vec!["adaptive_tabula.v0006".into()],
                         favorite_mods: vec!["eco_graph".into()],
                         map_vault_preset: "recommended".into(),
+                        map_vault_sort: "newest".into(),
+                        mod_vault_sort: "rating".into(),
+                        vault_page_size: 48,
+                        replay_list_columns: vec![64, 240, 150],
+                        live_replay_columns: vec![120, 200],
+                        coop_board_columns: Vec::new(),
                         mod_vault_preset: "recommended".into(),
                         mod_presets: Vec::new(),
                         leaderboard_rating_columns: vec![
@@ -5818,10 +5841,17 @@ const UNCOVERED_EVENT_VARIANTS: &[&str] = &[
     "Leaderboard:seasonsLoaded",
     "Lobby:avatarSelectionFailed",
     "Lobby:avatarsLoadFailed",
+    // The two lists themselves, snapshot and delta alike. Building a `Game` is
+    // twenty fields, and the value of a case here would be pinning the fold:
+    // the delta twins sort by id and upsert in place, and the snapshot twins
+    // assign. The fold is covered by matching unit tests on both sides
+    // (`state/lobby.rs` and `reducers/lobby.test.ts`) rather than by a replay.
+    "Lobby:gamesChanged",
     "Lobby:gamesUpdated",
     "Lobby:joinFailed",
     "Lobby:launchFailed",
     "Lobby:launching",
+    "Lobby:liveGamesChanged",
     "Lobby:liveGamesUpdated",
     "Lobby:matchmakingUpdated",
     "Lobby:partyUpdated",

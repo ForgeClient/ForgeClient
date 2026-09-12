@@ -20,6 +20,7 @@ function game(overrides: Partial<Game> = {}): Game {
     hostedAt: null,
     ratingMin: null,
     ratingMax: null,
+    enforceRatingRange: false,
     teams: { "1": ["Sheeo", "Nuggets"], "2": ["wlsn", "Stranger"] },
     simMods: {},
     ...overrides,

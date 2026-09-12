@@ -71,6 +71,41 @@ jobs:
         # old grep (which missed crates and matched comments).
         run: cargo clippy --workspace --all-targets -- -D warnings -D clippy::print_stderr
 
+  # Advisories and licences. Its own job because it needs no system libraries
+  # and no build of the workspace: both tools read Cargo.lock. Kept out of the
+  # Rust job so a new advisory does not look like a broken test.
+  supply-chain:
+    name: Dependencies - advisories + licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit and cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+
+      # Fails on vulnerabilities; unmaintained and unsound crates are printed
+      # without failing. That is the default and it is the right split here:
+      # this tree carries a few of the latter through Tauri with no successor
+      # to move to, and a gate nobody can pass gets switched off rather than
+      # fixed.
+      #
+      # The two ignores are quick-xml, reached only through
+      # `plist -> tauri-utils -> tauri-build`: a build dependency, not
+      # something the shipped client links or runs, and pinned there by
+      # plist's own requirement until Tauri moves. Revisit when it does.
+      - name: cargo audit
+        run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
+
+      # The policy is in deny.toml. Without one, `check licenses` fails on
+      # every crate in the tree, which is why this was never run before.
+      - name: cargo deny
+        run: cargo deny check licenses bans sources
+
   frontend:
     name: Frontend - lint + typecheck + test + build
     runs-on: ubuntu-latest

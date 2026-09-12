@@ -78,7 +78,11 @@ export function DiagnosticsSettingsSection() {
             </section>
           )}
           <p className="muted">{t("settings.diagnostics.truncated")}</p>
-          <textarea readOnly value={preview.content} aria-label={`Contents of ${preview.fileName}`} />
+          <textarea
+            readOnly
+            value={preview.content}
+            aria-label={t("settings.diagnostics.contentsOf", { file: preview.fileName })}
+          />
           <div className="settings-diagnostic-actions">
             <Button onClick={() => void navigator.clipboard.writeText(preview.content)}>{t("settings.diagnostics.copy")}</Button>
             <Button variant="primary" onClick={() => setPreview(null)}>{t("settings.diagnostics.close")}</Button>

@@ -57,7 +57,9 @@ export function MatchmakerFactionPicker({ selected, disabled, onChange }: Props)
             disabled={disabled}
             aria-pressed={active}
             className={active ? "faction-chip is-active" : "faction-chip"}
-            title={active ? `Queuing as ${faction}` : `Also queue as ${faction}`}
+            title={t(active ? "lobby.matchmaker.queuingAs" : "lobby.matchmaker.alsoQueueAs", {
+              faction,
+            })}
             onClick={() => toggle(faction)}
           >
             <FactionIcon faction={FACTION_IDS[faction]} size={22} />

@@ -337,8 +337,12 @@
   margin-top: var(--space-4);
 }
 
+/* The picture inside is square, so the dialog is as wide as the tallest square
+   that fits. Without the height term a short window capped the image and left
+   a band of empty dialog down its right-hand side, which is the whole of the
+   report: the space was not unused, it was unusable. */
 .map-preview-dialog {
-  width: min(760px, calc(100vw - 64px));
+  width: min(760px, calc(100vw - 64px), max(320px, calc(100vh - 250px)));
 }
 
 .map-preview-dialog .map-vault-preview {
@@ -386,6 +390,32 @@
   min-width: 0;
   flex-direction: column;
   gap: 2px;
+}
+
+/* The chip above, the action below, both against the right edge: the same
+   shape the installed mods list settled on. */
+.installed-map-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.installed-map-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Square, so the icon is the button rather than a word's worth of padding
+   around one. */
+.map-vault-uninstall.is-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  min-width: 0;
+  height: 30px;
+  padding: 0;
 }
 
 .installed-map-title-row {

@@ -1320,7 +1320,24 @@ pub struct GamePreferences {
     /// kept while it was on.
     #[serde(default)]
     pub keep_generated_maps: bool,
+    /// How many generated maps the keep list may hold, or `0` for no limit.
+    ///
+    /// The switch above answers "keep them"; this answers "how many". Without
+    /// it the two choices are keep nothing and keep everything, and the thread
+    /// that asked for this had watched the second one fill a system drive: a
+    /// generated map is kept because it was good, and the hundred before it
+    /// are still on the disk saying nothing.
+    ///
+    /// Oldest first when the cap is reached, which is what makes this a cache
+    /// rather than a quota that refuses new maps once it is full.
+    #[serde(default)]
+    pub keep_generated_maps_limit: u32,
 }
+
+/// The most generated maps a keep list may hold. Far past what anybody sets,
+/// and there so a hand-edited settings file cannot make the list unbounded by
+/// a different route than `0` does deliberately.
+pub const MAX_KEPT_GENERATED_MAPS: u32 = 500;
 
 fn default_true() -> bool {
     true
@@ -1346,6 +1363,7 @@ impl Default for GamePreferences {
             cache_rolling_branches: false,
             pipe_live_replay: false,
             keep_generated_maps: false,
+            keep_generated_maps_limit: 0,
         }
     }
 }
@@ -1360,6 +1378,8 @@ impl GamePreferences {
             .take(32)
             .collect();
         self.launch_wrapper = self.launch_wrapper.trim().to_owned();
+        self.keep_generated_maps_limit =
+            self.keep_generated_maps_limit.min(MAX_KEPT_GENERATED_MAPS);
         self
     }
 }
@@ -1559,6 +1579,20 @@ pub struct CustomGameBrowserPreferences {
     pub hide_unranked: bool,
     pub apply_filters: bool,
     pub rules: Vec<CustomGameFilterRule>,
+    /// Pixel widths of the list view's columns, left to right.
+    ///
+    /// Empty means "the stylesheet decides", which is both the default and
+    /// what a reset goes back to. A short list is padded the same way: a
+    /// column the user never dragged keeps its designed width rather than
+    /// collapsing because a neighbour was resized.
+    pub column_widths: Vec<u32>,
+    /// Pixel width of the detail panel beside the game list, or `0` for the
+    /// designed default.
+    ///
+    /// The tiles already resize (`gameTileColumns`); the panel beside them did
+    /// not, so a wider preview could only be had by making the browser
+    /// narrower and nothing offered that trade.
+    pub detail_width: u32,
 }
 
 impl<'de> Deserialize<'de> for CustomGameBrowserPreferences {
@@ -1575,6 +1609,8 @@ impl<'de> Deserialize<'de> for CustomGameBrowserPreferences {
             hide_unranked: bool,
             apply_filters: bool,
             rules: Vec<CustomGameFilterRule>,
+            column_widths: Vec<u32>,
+            detail_width: u32,
         }
 
         let wire = Wire::deserialize(deserializer)?;
@@ -1585,6 +1621,8 @@ impl<'de> Deserialize<'de> for CustomGameBrowserPreferences {
             hide_unranked: wire.hide_unranked,
             apply_filters: wire.apply_filters,
             rules: wire.rules,
+            column_widths: wire.column_widths,
+            detail_width: wire.detail_width,
         })
     }
 }
@@ -1609,9 +1647,36 @@ impl CustomGameBrowserPreferences {
             }
         }
         self.rules = rules;
+        // A settings file is a file, so every bound here is against a corrupt
+        // or hand-edited one rather than against anything a drag can produce.
+        self.column_widths.truncate(MAX_BROWSER_COLUMNS);
+        for width in &mut self.column_widths {
+            *width = (*width).clamp(MIN_BROWSER_COLUMN_PX, MAX_BROWSER_COLUMN_PX);
+        }
+        if self.detail_width != 0 {
+            self.detail_width = self.detail_width.clamp(MIN_DETAIL_PX, MAX_DETAIL_PX);
+        }
         self
     }
 }
+
+/// The list view has five columns, and a saved width past these bounds is a
+/// column that cannot be dragged back into view.
+pub const MAX_BROWSER_COLUMNS: usize = 5;
+/// The widest table the client draws, plus room. Only a bound on a file.
+pub const MAX_TABLE_COLUMNS: usize = 16;
+pub const MIN_BROWSER_COLUMN_PX: u32 = 56;
+pub const MAX_BROWSER_COLUMN_PX: u32 = 900;
+
+/// The detail panel's bounds. The floor is where the map preview stops being
+/// a preview; the ceiling leaves the game list usable on a small window.
+pub const MIN_DETAIL_PX: u32 = 220;
+pub const MAX_DETAIL_PX: u32 = 720;
+
+/// How many entries a vault page may show. The floor is a screen worth of
+/// them; the ceiling is where a page stops being a page.
+pub const MIN_VAULT_PAGE_SIZE: u32 = 12;
+pub const MAX_VAULT_PAGE_SIZE: u32 = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -1762,6 +1827,35 @@ pub struct BrowsingPreferences {
     pub map_vault_preset: String,
     /// Active preset filter in the mod vault ("recommended", "favorites", "rating", "ui", "newest", "all").
     pub mod_vault_preset: String,
+    /// Chosen sort order in the map vault, empty to follow the preset.
+    ///
+    /// Persisted for the same reason the preset is: leaving a tab and coming
+    /// back put the list in an order nobody asked for, and the order is the
+    /// half of a browse that a preset does not decide.
+    pub map_vault_sort: String,
+    /// Chosen sort order in the mod vault, empty to follow the preset.
+    pub mod_vault_sort: String,
+    /// How many entries a vault page shows, or `0` for the designed default.
+    ///
+    /// One number for maps and mods, installed and vault alike: the question
+    /// is about how much of the screen a reader wants filled, and answering it
+    /// four times over would be four settings saying the same thing.
+    pub vault_page_size: u32,
+    /// Column widths in the replay list, in pixels and in the order the
+    /// columns are drawn. Empty means the designed widths.
+    ///
+    /// The same shape and the same reason as
+    /// `CustomGameBrowserPreferences::column_widths`: the columns worth
+    /// widening are the ones whose contents the reader is scanning, and which
+    /// those are differs per person. Stored rather than kept in the browser so
+    /// it survives a reinstall, like every other browsing preference here.
+    pub replay_list_columns: Vec<u32>,
+    /// The same for the live-replay table, which is a different table with
+    /// different columns and therefore a different set of widths. Sharing one
+    /// list between them would have a drag in one tab move the other.
+    pub live_replay_columns: Vec<u32>,
+    /// And for the co-op leaderboard.
+    pub coop_board_columns: Vec<u32>,
     /// Named mod sets the host dialog can re-apply in one click.
     ///
     /// Only the word is shared with `mod_vault_preset` above, which is a vault
@@ -1808,6 +1902,12 @@ impl Default for BrowsingPreferences {
             favorite_mods: Vec::new(),
             map_vault_preset: "recommended".into(),
             mod_vault_preset: "recommended".into(),
+            map_vault_sort: String::new(),
+            mod_vault_sort: String::new(),
+            vault_page_size: 0,
+            replay_list_columns: Vec::new(),
+            live_replay_columns: Vec::new(),
+            coop_board_columns: Vec::new(),
             mod_presets: Vec::new(),
             leaderboard_rating_columns: DEFAULT_LEADERBOARD_RATING_COLUMNS
                 .iter()
@@ -1839,6 +1939,15 @@ impl<'de> Deserialize<'de> for BrowsingPreferences {
             favorite_mods: Vec<String>,
             map_vault_preset: String,
             mod_vault_preset: String,
+            map_vault_sort: String,
+            mod_vault_sort: String,
+            vault_page_size: u32,
+            #[serde(default)]
+            replay_list_columns: Vec<u32>,
+            #[serde(default)]
+            live_replay_columns: Vec<u32>,
+            #[serde(default)]
+            coop_board_columns: Vec<u32>,
             mod_presets: Vec<ModPreset>,
             leaderboard_rating_columns: Vec<String>,
             replay_vault_player: String,
@@ -1861,6 +1970,12 @@ impl<'de> Deserialize<'de> for BrowsingPreferences {
                     favorite_mods: defaults.favorite_mods,
                     map_vault_preset: defaults.map_vault_preset,
                     mod_vault_preset: defaults.mod_vault_preset,
+                    map_vault_sort: defaults.map_vault_sort,
+                    mod_vault_sort: defaults.mod_vault_sort,
+                    vault_page_size: defaults.vault_page_size,
+                    replay_list_columns: defaults.replay_list_columns,
+                    live_replay_columns: defaults.live_replay_columns,
+                    coop_board_columns: defaults.coop_board_columns,
                     mod_presets: defaults.mod_presets,
                     leaderboard_rating_columns: defaults.leaderboard_rating_columns,
                     replay_vault_player: defaults.replay_vault_player,
@@ -1883,6 +1998,12 @@ impl<'de> Deserialize<'de> for BrowsingPreferences {
             favorite_mods: wire.favorite_mods,
             map_vault_preset: wire.map_vault_preset,
             mod_vault_preset: wire.mod_vault_preset,
+            map_vault_sort: wire.map_vault_sort,
+            mod_vault_sort: wire.mod_vault_sort,
+            vault_page_size: wire.vault_page_size,
+            replay_list_columns: wire.replay_list_columns,
+            live_replay_columns: wire.live_replay_columns,
+            coop_board_columns: wire.coop_board_columns,
             mod_presets: wire.mod_presets,
             leaderboard_rating_columns: wire.leaderboard_rating_columns,
             replay_vault_player: wire.replay_vault_player,
@@ -1902,6 +2023,13 @@ const MAX_MODS_PER_PRESET: usize = 512;
 impl BrowsingPreferences {
     fn normalized(mut self) -> Self {
         self.custom_games_browser = self.custom_games_browser.normalized();
+        self.map_vault_sort = truncate_trimmed(self.map_vault_sort, 32);
+        self.mod_vault_sort = truncate_trimmed(self.mod_vault_sort, 32);
+        if self.vault_page_size != 0 {
+            self.vault_page_size = self
+                .vault_page_size
+                .clamp(MIN_VAULT_PAGE_SIZE, MAX_VAULT_PAGE_SIZE);
+        }
         self.matchmaker_unselected_queues =
             normalize_labels(self.matchmaker_unselected_queues, 64, 128);
         let selected_factions: Vec<String> = MATCHMAKER_FACTIONS
@@ -1984,8 +2112,27 @@ impl BrowsingPreferences {
             selected_columns
         };
         self.replay_vault_player = truncate_trimmed(self.replay_vault_player, 64);
+        self.replay_list_columns = normalize_column_widths(self.replay_list_columns);
+        self.live_replay_columns = normalize_column_widths(self.live_replay_columns);
+        self.coop_board_columns = normalize_column_widths(self.coop_board_columns);
         self
     }
+}
+
+/// Column widths as a settings file may hold them.
+///
+/// A zero is left alone: it is how a table says "this one keeps its designed
+/// width", and clamping it up to the minimum would silently turn an unset
+/// column into a narrow one. Everything else is bounded, against a corrupt or
+/// hand-edited file rather than against anything a drag can produce.
+fn normalize_column_widths(mut widths: Vec<u32>) -> Vec<u32> {
+    widths.truncate(MAX_TABLE_COLUMNS);
+    for width in &mut widths {
+        if *width != 0 {
+            *width = (*width).clamp(MIN_BROWSER_COLUMN_PX, MAX_BROWSER_COLUMN_PX);
+        }
+    }
+    widths
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, Type)]
@@ -2134,7 +2281,24 @@ impl SettingsState {
         // Zero: pruning by the clock is the persistence boundary's job, which
         // is where the clock is. Normalising only deduplicates here.
         self.events = self.events.pruned(0);
+        // After `game`, so a hand-edited limit is already bounded when the
+        // list is measured against it.
+        self.trim_kept_generated_maps();
         self
+    }
+
+    /// Drop the oldest kept maps until the list fits the limit.
+    ///
+    /// A no-op when the limit is `0`, which is what "keep them all" is spelled
+    /// as: a cap of zero would mean the switch above keeps nothing, and there
+    /// is already a switch for that.
+    pub fn trim_kept_generated_maps(&mut self) {
+        let limit = self.game.keep_generated_maps_limit as usize;
+        if limit == 0 || self.kept_generated_maps.len() <= limit {
+            return;
+        }
+        let excess = self.kept_generated_maps.len() - limit;
+        self.kept_generated_maps.drain(..excess);
     }
 }
 
@@ -2312,6 +2476,13 @@ pub fn reduce(state: &mut SettingsState, event: &SettingsEvent) {
                 }
                 state.kept_generated_maps.push(name.to_owned());
             }
+            // Oldest first, so the cap makes this a cache rather than a quota
+            // that starts refusing maps once it is full. Which names fell off
+            // is the caller's business: the service compares the list either
+            // side of this event and deletes the folders, because a name that
+            // is merely unprotected still occupies the disk it was capped to
+            // protect.
+            state.trim_kept_generated_maps();
         }
         SettingsEvent::MatchmakerVetoesChanged { vetoes } => {
             state.matchmaker_vetoes = vetoes.clone()
@@ -2804,6 +2975,10 @@ mod tests {
                             value: String::new(),
                         },
                     ],
+                    // Out of bounds in both directions, plus a sixth column
+                    // the list does not have.
+                    column_widths: vec![10, 5_000, 200, 200, 200, 200],
+                    detail_width: 40,
                 },
                 matchmaker_unselected_queues: vec![
                     "  ladder_1v1  ".into(),
@@ -2850,6 +3025,14 @@ mod tests {
                 ],
                 favorite_mods: vec!["  Eco_Graph  ".into(), "eco_graph".into(), String::new()],
                 map_vault_preset: "  NEWEST  ".into(),
+                map_vault_sort: "  newest  ".into(),
+                mod_vault_sort: String::new(),
+                vault_page_size: 5_000,
+                // Out of bounds, and a zero, which is how a column says it
+                // keeps its designed width.
+                replay_list_columns: vec![10, 200, 0, 9_999],
+                live_replay_columns: vec![1; 40],
+                coop_board_columns: Vec::new(),
                 mod_vault_preset: "  UI  ".into(),
                 mod_presets: Vec::new(),
                 leaderboard_rating_columns: vec![
@@ -2903,8 +3086,30 @@ mod tests {
         assert_eq!(settings.browsing.host_game.rating_max, 1_500);
         assert_eq!(settings.browsing.favorite_maps, ["adaptive_tabula.v0006"]);
         assert_eq!(settings.browsing.favorite_mods, ["eco_graph"]);
+        assert_eq!(
+            settings.browsing.replay_list_columns,
+            [MIN_BROWSER_COLUMN_PX, 200, 0, MAX_BROWSER_COLUMN_PX],
+            "a zero stays a zero; everything else is bounded"
+        );
+        assert_eq!(
+            settings.browsing.live_replay_columns.len(),
+            MAX_TABLE_COLUMNS,
+            "a file cannot describe more columns than the client draws"
+        );
         assert_eq!(settings.browsing.map_vault_preset, "newest");
         assert_eq!(settings.browsing.mod_vault_preset, "ui");
+        assert_eq!(settings.browsing.map_vault_sort, "newest");
+        assert_eq!(
+            settings.browsing.vault_page_size, MAX_VAULT_PAGE_SIZE,
+            "a page size out of a hand-edited file is clamped, not obeyed"
+        );
+        let browser = &settings.browsing.custom_games_browser;
+        assert_eq!(
+            browser.column_widths,
+            [MIN_BROWSER_COLUMN_PX, MAX_BROWSER_COLUMN_PX, 200, 200, 200],
+            "five columns, each within reach of a drag"
+        );
+        assert_eq!(browser.detail_width, MIN_DETAIL_PX);
         assert_eq!(
             settings.browsing.leaderboard_rating_columns,
             ["rating", "mean"]

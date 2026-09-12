@@ -184,6 +184,7 @@ fn game(id: i32, host: &str, members: &[&str]) -> Game {
         hosted_at: None,
         rating_min: None,
         rating_max: None,
+        enforce_rating_range: false,
         teams,
         sim_mods: BTreeMap::new(),
     }

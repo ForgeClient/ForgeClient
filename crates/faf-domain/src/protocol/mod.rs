@@ -9,6 +9,7 @@ pub mod changelog;
 pub mod chat_input;
 pub mod discord;
 pub mod galactic_war;
+pub mod game_outcome;
 pub mod gpgnet;
 pub mod irc;
 pub mod log_analysis;

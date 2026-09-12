@@ -1,13 +1,20 @@
-import { memo, useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "../../design-system/Button";
 import { Icon } from "../../design-system/Icon";
 import { EmptyState } from "../../design-system/EmptyState";
 import { Modal } from "../../design-system/Modal";
+import { ResizeHandle } from "../../design-system/ResizeHandle";
 import type { Game, PlayerProfile, VaultMap, VaultMod } from "../../ipc/bindings";
 import { ipc } from "../../ipc/client";
 import { GameMapImage } from "./GameMapImage";
-import { findVaultMap, findVaultMapByFolder, isGeneratedMap, mapPresentation } from "../../shared/mapPresentation";
+import {
+  findVaultMap,
+  findVaultMapByFolder,
+  isGeneratedMap,
+  mapPresentation,
+  mapVersionOf,
+} from "../../shared/mapPresentation";
 import { formatRelativeDuration } from "../../shared/durations";
 import { flagSrc } from "../../shared/countryFlags";
 import { useCountryLabel } from "../../shared/useCountryLabel";
@@ -22,12 +29,36 @@ import {
 } from "../maps/generatedMapDescription";
 import { openPlayerCard } from "../player-card/playerCardActions";
 import { friendKeys, friendsInGame } from "./friendPresence";
-import { t } from "../../i18n";
+import { columnTemplate, columnWidths, withColumnResized } from "./browserLayout";
+import { formatNumber, t } from "../../i18n";
 import { useLocale } from "../../i18n/useTranslation";
 import { PlayerName } from "../../shared/nameColors";
-import { displayedRating, gameLeaderboard } from "../../shared/playerRatings";
+import { displayedRating, gameLeaderboard, ratingGateBlocks } from "../../shared/playerRatings";
 
 export type GameViewMode = "list" | "tiles";
+
+/**
+ * Persist the list's column widths.
+ *
+ * An empty array is the reset: the backend keeps it, and `columnWidths` reads
+ * it back as "use the designed widths", so a reset survives a restart the same
+ * way a drag does.
+ */
+function saveColumnWidths(widths: number[]): void {
+  const current = useAppStore.getState().state.settings.browsing;
+  ipc.send({
+    kind: "Settings",
+    command: {
+      type: "setBrowsing",
+      payload: {
+        preferences: {
+          ...current,
+          customGamesBrowser: { ...current.customGamesBrowser, columnWidths: widths },
+        },
+      },
+    },
+  });
+}
 
 // The mod catalogue keyed by uid, cached against the identity of the list it
 // was built from: it is replaced only when the catalogue is reloaded.
@@ -153,12 +184,25 @@ export function showsUnrankedTag(
  * "Rating range: {min} to {max}" in words, and a screen reader announcing a
  * lone hyphen between two numbers is noise.
  */
-function RatingRangeTag({ min, max }: { min: number | null; max: number | null }) {
+function RatingRangeTag(
+  { min, max, enforced }: { min: number | null; max: number | null; enforced: boolean },
+) {
   const any = t("lobby.browser.any");
   const from = min === null ? any : minusSign(min);
   const to = max === null ? any : minusSign(max);
   return (
-    <i className="game-rating-range" title={t("lobby.browser.ratingRangeTooltip", { from, to })}>
+    <i
+      className={`game-rating-range${enforced ? " is-enforced" : ""}`}
+      title={
+        enforced
+          ? t("lobby.browser.ratingRangeEnforcedTooltip", { from, to })
+          : t("lobby.browser.ratingRangeTooltip", { from, to })
+      }
+    >
+      {/* A closed padlock is the difference between a range that keeps people
+          out and one that only suggests. Without it both looked the same, and
+          only one of them was a rule. */}
+      {enforced && <Icon name="lock" size={9} />}
       <span>{from}</span>
       <span className="game-rating-range-separator" aria-hidden="true">-</span>
       <span>{to}</span>
@@ -251,11 +295,15 @@ export function hideGlobalLineup() {
  * -- and reaching it means crossing the gap between the row and the overlay,
  * which is a `mouseleave` with nothing under the pointer. Closing on that
  * would make the overlay unreachable, so leaving starts a timer instead and
- * arriving anywhere that counts cancels it. A second is long enough to cross
- * six pixels without hurrying and short enough that an overlay nobody wants is
- * gone before it is in the way.
+ * arriving anywhere that counts cancels it.
+ *
+ * A second was the first guess and it was far too long: scanning down the list
+ * the overlay trails the pointer by a visible beat, which reads as the client
+ * lagging rather than as a grace period. A sixth of a second still covers the
+ * six-pixel gap -- a pointer crosses that in well under 50ms -- while being
+ * short enough that leaving looks like leaving.
  */
-const LINEUP_GRACE_MS = 1000;
+const LINEUP_GRACE_MS = 160;
 
 let lineupHideTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -436,7 +484,9 @@ function GameLineup({
       onMouseEnter={cancelLineupHide}
       onMouseLeave={hideGlobalLineupSoon}
     >
-      <header className="game-lineup-title">{game.title}</header>
+      {/* No title. This overlay is anchored to the row or tile that already
+          carries the game's name in larger type, so repeating it here was the
+          same words twice within an inch of each other. */}
       {mirrored && <TeamBalance teams={teams} profileFor={profileFor} leaderboard={leaderboard} />}
       {teams.length > 0 ? (
         <div
@@ -577,10 +627,10 @@ function GameLineupTeam({
       <header>
         <b>{displayTeamName(team, soleTeam)}</b>
         {total === null ? (
-          <span>{players.length} player{players.length === 1 ? "" : "s"}</span>
+          <span>{t("lobby.browser.playerCount", { count: players.length })}</span>
         ) : (
           <span title={t("lobby.browser.combinedRating")}>
-            <strong>{total.toLocaleString("en-US")}</strong> rating
+            {t("lobby.browser.teamRating", { rating: formatNumber(total) })}
           </span>
         )}
       </header>
@@ -609,7 +659,7 @@ function GameLineupTeam({
                 type="button"
                 className="game-team-player"
                 onClick={() => openPlayerCard(profile?.id ?? null, login)}
-                title={`Open ${login}'s profile`}
+                title={t("lobby.browser.openProfile", { name: login })}
               >
                 <PlayerName name={login} className="game-lineup-player" />
               </button>
@@ -643,11 +693,14 @@ function friendsHere(game: Game, wanted: ReadonlySet<string>): { friends: string
   // an interpolation for every row of a hundred-game list, several times a
   // second, to produce a string nothing displayed.
   if (friends.length === 0) return NOBODY;
+  // The count, never the name. A single friend used to be named here, and the
+  // name was already on the tile in the lineup underneath: the same person
+  // twice, once as a tag among "unranked" and "3 SIM" where a name does not
+  // belong. Who they are is in the title attribute, and in the lineup the
+  // tile shows on hover.
   return {
     friends,
-    label: friends.length === 1
-      ? friends[0]
-      : t("lobby.browser.friendCount", { count: friends.length }),
+    label: t("lobby.browser.friendCount", { count: friends.length }),
   };
 }
 
@@ -727,13 +780,16 @@ export const GameTile = memo(function GameTile({
         className="game-tile-body"
         onClick={onSelect}
         onDoubleClick={onJoin}
-        aria-label={`${game.title}, hosted by ${game.host}. Double-click to join.`}
+        aria-label={t("lobby.browser.tileAria", { title: game.title, host: game.host })}
         aria-pressed={selected}
         aria-describedby={tooltipPosition ? tooltipId : undefined}
       >
         <span className="game-tile-title" title={game.title}>{game.title}</span>
         <span className="game-tile-primary-stats">
-          <span><b>{players} / {game.maxPlayers}</b><small>{players === 1 ? "player" : "players"}</small></span>
+          <span>
+            <b>{players} / {game.maxPlayers}</b>
+            <small>{t("lobby.browser.playersWord", { count: players })}</small>
+          </span>
           <span><b>{formatAge(game.hostedAt, now)}</b><small>age</small></span>
           <span><b>{game.averageRating || "N/A"}</b><small>avg. rating</small></span>
         </span>
@@ -748,16 +804,26 @@ export const GameTile = memo(function GameTile({
             </i>
           )}
           {unranked && <i className="unranked">{t("lobby.browser.unranked")}</i>}
-          {friends.length > 0 && (
-            <i className="friend" title={t("lobby.browser.friendsHere", { names: friends.join(", ") })}>
-              {friendLabel}
-            </i>
-          )}
           {(game.ratingMin !== null || game.ratingMax !== null) && (
-            <RatingRangeTag min={game.ratingMin} max={game.ratingMax} />
+            <RatingRangeTag min={game.ratingMin} max={game.ratingMax} enforced={game.enforceRatingRange} />
           )}
         </span>
-        <span className="game-tile-host"><small>{t("lobby.browser.host")}</small><b><PlayerName name={game.host} /></b></span>
+        {/* The friend count goes in the empty half of the host line rather
+            than among the tags. It is not a property of the lobby the way
+            "unranked" and "3 SIM" are -- it is a nice thing to notice -- so it
+            reads as a note, not as a badge. */}
+        <span className="game-tile-host">
+          <small>{t("lobby.browser.host")}</small>
+          <b><PlayerName name={game.host} /></b>
+          {friends.length > 0 && (
+            <span
+              className="game-tile-friends"
+              title={t("lobby.browser.friendsHere", { names: friends.join(", ") })}
+            >
+              {friendLabel}
+            </span>
+          )}
+        </span>
       </button>
       {tooltipPosition && createPortal(
         <GameLineup game={game} id={tooltipId} position={tooltipPosition} />,
@@ -773,6 +839,7 @@ export const GameBrowserRow = memo(function GameBrowserRow({
   vaultMods,
   friendSet,
   now,
+  columnStyle,
   selected,
   onSelect,
   onJoin,
@@ -785,6 +852,8 @@ export const GameBrowserRow = memo(function GameBrowserRow({
   /** The friend list, lower-cased once for the whole list. */
   friendSet: ReadonlySet<string>;
   now?: number;
+  /** The column template, built once by the browser and shared by every row. */
+  columnStyle?: React.CSSProperties;
   selected: boolean;
   onSelect: () => void;
   onJoin: () => void;
@@ -805,6 +874,7 @@ export const GameBrowserRow = memo(function GameBrowserRow({
         className={
           `game-browser-row${friends.length > 0 ? " has-friend" : ""}${selected ? " active" : ""}`
         }
+        style={columnStyle}
         onClick={onSelect}
         onDoubleClick={onJoin}
         onContextMenu={(event) => {
@@ -864,7 +934,7 @@ export const GameBrowserRow = memo(function GameBrowserRow({
                   </i>
                 )}
                 {(game.ratingMin !== null || game.ratingMax !== null) && (
-                  <RatingRangeTag min={game.ratingMin} max={game.ratingMax} />
+                  <RatingRangeTag min={game.ratingMin} max={game.ratingMax} enforced={game.enforceRatingRange} />
                 )}
               </span>
             </div>
@@ -873,6 +943,12 @@ export const GameBrowserRow = memo(function GameBrowserRow({
 
         <div className="game-browser-map-col">
           <strong title={presentation.displayName}>{presentation.displayName}</strong>
+          {/* Which version, not just which map. Two lobbies on "Dual Gap" can
+              be on maps that play differently, and the folder name is the only
+              place that ever said so. */}
+          {mapVersionOf(game.map) && (
+            <small className="game-browser-map-version">v{mapVersionOf(game.map)}</small>
+          )}
         </div>
 
         <div className="game-browser-players-col">
@@ -961,6 +1037,17 @@ export const GamePreviewDialog = memo(function GamePreviewDialog({
     teamPlayers.some((p) => p.localeCompare(player.name, undefined, { sensitivity: "base" }) === 0)
   );
 
+  // The server hides an enforced lobby from an out-of-range player, so this
+  // usually never fires. It fires for the lobby that was already on screen
+  // when the host set the range, which is the case worth catching: the join
+  // would otherwise download mods for a minute and then be refused.
+  const social = useAppStore((state) => state.state.social);
+  const ownRating = displayedRating(
+    player ? findPlayer(social, player.name) : undefined,
+    gameLeaderboard(game.ratingType),
+  );
+  const ratingBlocked = !isHost && ratingGateBlocks(game, ownRating);
+
   const isJoiningThis = lobby.join.type === "joining" && lobby.join.payload.id === game.id;
   const isPreparingThis = lobby.join.type === "preparing";
   const isLaunchedThis = lobby.join.type === "launched" && lobby.join.payload.launch.uid === game.id;
@@ -990,6 +1077,14 @@ export const GamePreviewDialog = memo(function GamePreviewDialog({
     joinLabel = t("lobby.details.joinGame");
     joinDisabled = true;
     joinTitle = t("lobby.details.alreadyInGame");
+  } else if (ratingBlocked) {
+    joinLabel = t("lobby.details.ratingLocked");
+    joinDisabled = true;
+    joinTitle = t("lobby.details.ratingLockedTitle", {
+      from: game.ratingMin === null ? t("lobby.browser.any") : String(game.ratingMin),
+      to: game.ratingMax === null ? t("lobby.browser.any") : String(game.ratingMax),
+      rating: String(ownRating ?? 0),
+    });
   }
 
   return (
@@ -1141,6 +1236,39 @@ export function CustomGamesBrowser({
   const [internalPreviewGame, setInternalPreviewGame] = useState<Game | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
 
+  // Column widths live in settings, but a drag has to be visible before it is
+  // saved: writing every pointer move through the backend would be a round
+  // trip per pixel. So the saved widths seed a local copy, the drag moves the
+  // copy, and releasing the handle persists it.
+  const savedWidths = useAppStore(
+    (state) => state.state.settings.browsing.customGamesBrowser.columnWidths,
+  );
+  const [dragWidths, setDragWidths] = useState<number[] | null>(null);
+  const widths = dragWidths ?? columnWidths(savedWidths);
+  const dragOrigin = useRef<number[] | null>(null);
+  const columnStyle = useMemo(
+    () => (viewMode === "list" ? { gridTemplateColumns: columnTemplate(widths) } : undefined),
+    // The template is a string, so comparing the array by value is what keeps
+    // every row from re-rendering on an unrelated settings write.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [viewMode, widths.join(",")],
+  );
+
+  const onColumnDrag = (index: number, delta: number) => {
+    dragOrigin.current ??= widths;
+    setDragWidths(withColumnResized(dragOrigin.current, index, delta));
+  };
+  const onColumnCommit = () => {
+    dragOrigin.current = null;
+    if (dragWidths) saveColumnWidths(dragWidths);
+    setDragWidths(null);
+  };
+  const onColumnReset = () => {
+    dragOrigin.current = null;
+    setDragWidths(null);
+    saveColumnWidths([]);
+  };
+
   const handlePreview = onPreviewProp ?? setInternalPreviewGame;
 
   // Read once for the whole list. Every row used to subscribe to the mod vault
@@ -1185,15 +1313,34 @@ export function CustomGamesBrowser({
     ? { gridTemplateColumns: `repeat(${tileColumns}, minmax(0, 1fr))` }
     : undefined;
 
+  const columnLabels = [
+    t("lobby.browser.column.game"),
+    t("lobby.browser.column.map"),
+    t("lobby.browser.column.players"),
+    t("lobby.browser.column.rating"),
+    t("lobby.browser.column.age"),
+  ];
+
   return (
     <section className={`game-browser-panel surface-panel game-browser-${viewMode}`}>
       {viewMode === "list" && (
-        <div className="game-browser-head">
-          <span>{t("lobby.browser.column.game")}</span>
-          <span>{t("lobby.browser.column.map")}</span>
-          <span>{t("lobby.browser.column.players")}</span>
-          <span>{t("lobby.browser.column.rating")}</span>
-          <span>{t("lobby.browser.column.age")}</span>
+        <div className="game-browser-head" style={columnStyle}>
+          {columnLabels.map((label, index) => (
+            <span key={label}>
+              {label}
+              {/* The last column has nothing to its right to give width to,
+                  so it is sized by the ones before it. */}
+              {index < columnLabels.length - 1 && (
+                <ResizeHandle
+                  className="game-browser-col-handle"
+                  label={t("lobby.browser.resizeColumn", { column: label })}
+                  onDrag={(delta) => onColumnDrag(index, delta)}
+                  onEnd={onColumnCommit}
+                  onReset={onColumnReset}
+                />
+              )}
+            </span>
+          ))}
         </div>
       )}
       <div
@@ -1231,6 +1378,7 @@ export function CustomGamesBrowser({
               vaultMods={vaultMods}
               friendSet={friendSet}
               now={now}
+              columnStyle={columnStyle}
               selected={selectedId === game.id}
               onSelect={() => onSelect(game.id)}
               onJoin={() => onJoin(game)}

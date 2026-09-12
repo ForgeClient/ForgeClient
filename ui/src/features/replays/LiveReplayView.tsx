@@ -10,6 +10,7 @@ import {
   allGamePlayers,
   DEFAULT_LIVE_FILTERS,
   LIVE_REPLAY_BATCH_SIZE,
+  liveFeaturedModOptions,
   liveSortValue,
   type IndexedLiveGame,
   type LiveFilters,
@@ -79,10 +80,7 @@ export function LiveReplayView({ busy }: { busy: boolean }) {
     () => [...new Set(liveGames.map((game) => game.gameType).filter(Boolean))].sort(),
     [liveGames],
   );
-  const featuredMods = useMemo(
-    () => [...new Set(liveGames.map((game) => game.modName).filter(Boolean))].sort(),
-    [liveGames],
-  );
+  const featuredMods = useMemo(() => liveFeaturedModOptions(liveGames), [liveGames]);
   const activePlayerOptions = useMemo(
     () => [...new Set(liveGames.map((game) => game.players))].sort((a, b) => a - b),
     [liveGames],

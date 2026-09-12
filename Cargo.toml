@@ -7,6 +7,28 @@ version = "0.6.2"
 edition = "2021"
 license = "MIT"
 
+# Line tables instead of full debug info, for the link step rather than the
+# compile step.
+#
+# The MSVC linker reads the debug information of every crate when it produces
+# the final binary, and this workspace links around 530 of them. That is the
+# slow part of `tauri dev` after a change to `faf-domain` or `faf-app`, which
+# forces a relink whether or not the shell itself changed, and it is slow
+# whatever state the target directory is in: it is the size of the debug info,
+# not the size of the folder.
+#
+# `debug = 1` keeps file and line, so a panic still says where it came from and
+# a backtrace still reads. What it gives up is inspecting variables in a
+# stepping debugger. Set it back to `2` and pay one full rebuild if that is
+# ever the trade you want.
+[profile.dev]
+debug = 1
+
+# Dependencies are not what anybody steps through, and they are most of the
+# 530. No debug info for them at all.
+[profile.dev.package."*"]
+debug = 0
+
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

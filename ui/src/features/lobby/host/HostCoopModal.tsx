@@ -382,11 +382,15 @@ export const HostCoopModal = memo(function HostCoopModal({ onClose, initialMissi
                   <Icon name="maps" size={32} />
                 </div>
               )}
-              <div className="host-preview-overlay">
-                <span className="host-preview-title" title={selected?.name}>
-                  {selected?.name ?? t("lobby.coop.selectMission")}
-                </span>
-              </div>
+            </div>
+
+            {/* The name under the art rather than over it, matching the custom
+                host dialog: the overlay dimmed the corner of every preview to
+                repeat what the row below already says. */}
+            <div className="host-preview-name">
+              <span title={selected?.name}>
+                {selected?.name ?? t("lobby.coop.selectMission")}
+              </span>
             </div>
 
             {selected && (

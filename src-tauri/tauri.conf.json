@@ -49,6 +49,22 @@
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["fafreplay"],
+        "name": "FAForever Replay",
+        "description": "Forged Alliance Forever replay",
+        "role": "Viewer",
+        "mimeType": "application/x-fafreplay"
+      },
+      {
+        "ext": ["scfareplay"],
+        "name": "Supreme Commander Replay",
+        "description": "Supreme Commander: Forged Alliance replay",
+        "role": "Viewer",
+        "mimeType": "application/x-scfareplay"
+      }
     ]
   }
 }
